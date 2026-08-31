@@ -1697,7 +1697,32 @@ class TaskStore:
             )
             return self._fetch_task(conn, task_id, group_id)
 
+    def update_task_fields(
+        self,
+        task_id: int,
+        group_id: int,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> Task | None:
+        now = _dt_to_str(_utcnow())
+        with self._conn() as conn:
+            current = self._fetch_task(conn, task_id, group_id)
+            if current is None:
+                return None
+            new_title = title if title is not None else current.title
+            new_desc = description if description is not None else current.description
+            conn.execute(
+                """
+                UPDATE tasks SET title = ?, description = ?, updated_at = ?
+                WHERE id = ? AND telegram_chat_id = ?
+                """,
+                (new_title, new_desc, now, task_id, group_id),
+            )
+            return self._fetch_task(conn, task_id, group_id)
+
     def set_due_date(self, task_id: int, group_id: int, due_date: date) -> Task | None:
+
         now = _dt_to_str(_utcnow())
         with self._conn() as conn:
             conn.execute(

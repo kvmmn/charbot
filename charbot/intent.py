@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from charbot.glossary import is_learn_utterance
 from charbot.members import find_member_in_text
 from charbot.voice import is_voice_confirmation
 
@@ -17,6 +18,8 @@ class SpeechActKind(str, Enum):
     REPORT = "report"
     CONFIRM = "confirm"
     ASK_WHICH = "ask_which"
+    LEARN = "learn"
+    CHECKIN = "checkin"
     UNKNOWN = "unknown"
 
 
@@ -156,13 +159,33 @@ def _is_new_work(text: str) -> bool:
     return False
 
 
+_CHECKIN_END_RE = re.compile(
+    r"(?:اوکی|اکی|okay|ok|باشه|باش)\s*[؟?]\s*$",
+    re.IGNORECASE,
+)
+_CHECKIN_HINTS = ("متوجه شدی", "فهمیدی", "گرفتی؟", "گرفتی ?", "درست متوجه")
+
+
+def is_checkin(text: str) -> bool:
+    """«اوکی؟» / متوجه شدی؟ = did you get it, not a voice-transcript yes."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _CHECKIN_END_RE.search(t):
+        return True
+    return any(h in t for h in _CHECKIN_HINTS)
+
+
 def _is_confirm(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    if is_voice_confirmation(t) and len(t) <= 80:
+    # Teaching or «اوکی؟» check-in is not a transcript lock.
+    if is_learn_utterance(t) or (is_checkin(t) and ("؟" in t or "?" in t) and len(t) > 12):
+        return False
+    if is_voice_confirmation(t) and len(t) <= 80 and not is_checkin(t):
         return True
-    if has_inventory_ask(t) or _asks_role(t):
+    if has_inventory_ask(t) or _asks_role(t) or is_learn_utterance(t):
         return False
     return any(h in t for h in _FOLLOWUP)
 
@@ -211,6 +234,14 @@ def classify_speech_act(text: str, *, speaker_key: str | None = None) -> SpeechA
     if _is_report(raw):
         return SpeechAct(SpeechActKind.REPORT)
 
+    if is_learn_utterance(raw):
+        return SpeechAct(SpeechActKind.LEARN)
+
+    # «اوکی؟» after teaching, or a bare check-in. Pending voice already
+    # consumed short yes-words in handle_pending_voice_text.
+    if is_checkin(raw):
+        return SpeechAct(SpeechActKind.CHECKIN)
+
     if _is_confirm(raw):
         return SpeechAct(SpeechActKind.CONFIRM)
 
@@ -239,6 +270,24 @@ def classify_utterance(text: str) -> UtteranceKind:
     if act.kind == SpeechActKind.UNKNOWN and is_interrogative(text):
         return UtteranceKind.QUESTION
     return UtteranceKind.UNKNOWN
+
+
+def must_reply(act: SpeechAct, text: str) -> bool:
+    """Directed speech in the allowed group is never dropped."""
+    if act.kind in (
+        SpeechActKind.LIST_TASKS,
+        SpeechActKind.QUERY_ROLE,
+        SpeechActKind.REPORT,
+        SpeechActKind.ASK_WHICH,
+        SpeechActKind.LEARN,
+        SpeechActKind.CHECKIN,
+        SpeechActKind.CREATE_TASK,
+    ):
+        return True
+    t = text or ""
+    if is_interrogative(t) or is_checkin(t) or is_learn_utterance(t):
+        return True
+    return False
 
 
 def may_create_task(text: str) -> bool:

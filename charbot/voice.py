@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from charbot.buttons import question_buttons
+from charbot.glossary import is_learn_utterance
 from charbot.members import member_display_fa
 from charbot.store import TaskStore
 
@@ -32,7 +33,7 @@ OPENROUTER_ASR_MODEL = "deepgram/nova-3"
 OPENROUTER_ASR_FALLBACK_MODEL = "openai/whisper-large-v3"
 ASR_GLOSSARY_PROMPT = (
     "Persian speech. Proper names: چهارستون، شی SHEY، مشهد، فرجی، فرهمند، "
-    "GTI، امام خمینی، مهرآباد، غزل، حامد، سامان، محمدرضا، کاوه."
+    "JTI جی‌تی‌آی، امام خمینی، مهرآباد، غزل، حامد، سامان، محمدرضا، کاوه."
 )
 CONFIRM_ASK_FA = "این را از صدایت نوشتم. همین بود؟"
 REASK_FA = "این درست شد؟"
@@ -786,6 +787,8 @@ def handle_pending_voice_text(
         member_key=member_key,
         chat_id=chat_id,
     )
+    if is_learn_utterance(raw) and not waiting_edit:
+        return VoiceConfirmResult(action="ignored", html=False)
     if waiting_edit:
         store.set_person_fact(member_key, "notes", FACT_PENDING_EDIT, "", source="voice")
     elif is_voice_confirmation(raw):

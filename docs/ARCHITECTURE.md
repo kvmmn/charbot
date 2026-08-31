@@ -11,9 +11,11 @@ flowchart LR
   G[X-Chaharsotoon<br/>text · voice · photos · taps] -->|HTTPS webhook| F["Fly.io fra<br/>chaharsotoon-charbot"]
   F --> I[Speech-act gate]
   I -->|list / role / report| R[Reply in group]
+  I -->|learn / اوکی؟| G[Store glossary + ack]
   I -->|new work| T[Create task]
   I -->|voice| V[ASR then confirm]
   I -->|unsure| Q[Ask with inline buttons]
+  G --> N[(Neon Postgres)]
   T --> N[(Neon Postgres)]
   V --> N
   N --> R
@@ -54,6 +56,9 @@ sequenceDiagram
   else voice
     Fly->>Fly: HTTP ASR
     Fly-->>TG: transcript + confirm buttons
+  else LEARN / CHECKIN
+    Gate->>Store: glossary upsert
+    Fly-->>TG: اوکی. JTI / جی‌تی‌آی می‌نویسم
   else unknown / missing fields
     Fly-->>TG: short question + content-bound inline buttons
   end
@@ -88,6 +93,8 @@ sequenceDiagram
 | New work imperative | `CREATE_TASK` | `قرارداد حامد را تا فردا بررسی کن` |
 | Ambiguous «چیکار می‌کنه» | `ASK_WHICH` | buttons: کارهاش / نقشش |
 
+**Agency:** directed speech in the allowed group never goes silent. `must_reply()` is true for questions, teaching, and check-ins (`اوکی؟` = did you get it). No `@mention` required. Short bare `اوکی` still confirms a pending voice transcript.
+
 Defense in depth:
 
 1. Classifier runs **before** `extract_task`.
@@ -109,7 +116,7 @@ Preference order (`charbot/voice.py` `asr_backends()`):
 | 2 | same key | same | `openai/whisper-large-v3` | Cheap multilingual fallback (~$0.0005/min via OpenRouter) |
 | 3 | `OPENAI_API_KEY` | `https://api.openai.com/v1/audio/transcriptions` | `gpt-4o-mini-transcribe` | Last resort on the existing OpenAI key |
 
-Always send `language=fa`. Whisper-family calls also send a glossary prompt (چهارستون، شی/SHEY, names, airports). Deepgram rejects that prompt field, so it is omitted for Nova-3.
+Always send `language=fa`. Whisper-family calls also send a glossary prompt (چهارستون، شی/SHEY, **JTI/جی‌تی‌آی**, names, airports). `GTI` is an alias of JTI, not a name. Deepgram rejects that prompt field, so it is omitted for Nova-3.
 
 Override first OpenRouter slug with `CHARBOT_ASR_MODEL` only when it contains `/` (full OpenRouter id).
 

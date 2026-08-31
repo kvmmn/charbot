@@ -44,6 +44,12 @@ from charbot.nlp import (
     parse_task_command,
 )
 from charbot.understand import clean_work_text, extract_task
+from charbot.glossary import (
+    ack_learn,
+    apply_to_open_tasks,
+    extract_glossary_entries,
+    upsert_entries,
+)
 from charbot.intent import (
     CALLBACK_ID_PERSON,
     PERSON_CALLBACK_ID,
@@ -51,6 +57,7 @@ from charbot.intent import (
     SpeechActKind,
     classify_speech_act,
     may_create_task,
+    must_reply,
 )
 from charbot.report import (
     berlin_today,
@@ -145,6 +152,14 @@ def _looks_like_work(text: str) -> bool:
 
 def _is_question(text: str) -> bool:
     return any(h in text for h in QUESTION_HINTS) or any(h in text for h in IMPERATIVE_HINTS)
+
+
+def _apply_learn(store: TaskStore, group_id: int, raw: str) -> str:
+    entries = extract_glossary_entries(raw)
+    if entries:
+        upsert_entries(store, entries)
+        apply_to_open_tasks(store, group_id, entries)
+    return ack_learn(entries)
 
 
 def is_board_overview(text: str) -> bool:
@@ -1031,6 +1046,13 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             )
         return
 
+    if act.kind == SpeechActKind.LEARN:
+        await message.reply_text(_apply_learn(store, group_id, raw))
+        return
+    if act.kind == SpeechActKind.CHECKIN:
+        await message.reply_text("آره.")
+        return
+
     named = find_member_in_text(raw)
     if is_voice_question(raw) or _voice_followup(message):
         tg_mid = replied.message_id if replied and (replied.voice or replied.audio) else None
@@ -1130,6 +1152,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
                     context=follow.context_text,
                 )
                 await message.reply_text(u.ask or "مسئول کیست و موعد کی است؟")
+            elif must_reply(act, raw):
+                await message.reply_text("آره، گوش می‌دهم.")
             return
 
         if addressed and any(g in raw for g in ("سلام", "هی", "درود", "خوبی", "ازگل")) and len(raw) < 40:
@@ -1182,6 +1206,9 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
         if addressed:
             await message.reply_text("گوش می‌دهم. کار است، سؤال است، یا نقش؟")
+            return
+        if must_reply(act, raw):
+            await message.reply_text("آره، گوش می‌دهم.")
             return
         return
 

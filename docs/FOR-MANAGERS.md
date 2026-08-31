@@ -17,8 +17,10 @@ flowchart TD
   B -->|Question about a role<br/>نقش حامد چیه؟| D[Answer the stored role]
   B -->|New work to do| E[Save a task card]
   B -->|Voice note| F[Write the words, ask the speaker: same?]
+  B -->|Teach a name / اوکی؟| L[Remember it and answer]
   B -->|گزارش این هفته| G[Done / open / overdue per person]
   C --> H[Short reply in the group]
+  L --> H
   D --> H
   E --> H
   F --> H
@@ -37,6 +39,7 @@ flowchart TD
 ## How to talk to it
 
 - Ordinary Persian is enough. Slash commands are optional.
+- If you teach a name («اسم کارفرما JTI است. اوکی؟») it must answer, remember it, and use it. Silence on «اوکی؟» is a bug.
 - «کارهای سامان چی؟» lists Saman’s open work. It must **not** open a new task titled «های سامان چی».
 - «نقش حامد چیه؟» is the job title. «کارهای حامد» is his task list. Those are different questions.
 - After a voice note, only the speaker confirms or edits the transcript.

@@ -225,6 +225,8 @@ def parse_natural_language(
         SpeechActKind.ASK_WHICH,
         SpeechActKind.CONFIRM,
         SpeechActKind.REPORT,
+        SpeechActKind.LEARN,
+        SpeechActKind.CHECKIN,
         SpeechActKind.UNKNOWN,
     ) and not may_create_task(raw):
         return ParsedNL(intent=NLIntent.NONE)
