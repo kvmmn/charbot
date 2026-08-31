@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from charbot.report import (
-    berlin_today,
     format_period_report,
     month_bounds,
     parse_report_request,

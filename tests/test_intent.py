@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from charbot.bot import interpret_work_or_followup
 from charbot.intent import SpeechActKind, classify_speech_act, may_create_task
 from charbot.nlp import NLIntent, parse_natural_language
-from charbot.bot import interpret_work_or_followup
 from charbot.store import TaskStore
 
 TODAY = date(2026, 8, 31)
@@ -144,6 +144,7 @@ def test_interpret_still_creates_imperative(tmp_path: Path) -> None:
 
 def test_gate_runs_before_role_dump() -> None:
     import inspect
+
     import charbot.bot as bot
 
     src = inspect.getsource(bot.handle_natural_language)

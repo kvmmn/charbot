@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from charbot.members import BOARD_MEMBERS, member_display_fa
 from charbot.nlp import parse_date
-from charbot.store import Task, TaskStatus, TaskStore
+from charbot.store import TaskStatus, TaskStore
 
 BERLIN = ZoneInfo("Europe/Berlin")
 REPORT_PEOPLE = tuple(m.key for m in BOARD_MEMBERS)  # board then staff (Ghazal)
@@ -173,7 +173,8 @@ def format_period_report(
     for row in people:
         body = (
             f"<b>{row.display}</b>\n"
-            f"انجام‌شده: {row.done_in_period}  ·  به‌موقع: {row.on_time_done}  ·  دیر: {row.late_done}\n"
+            f"انجام‌شده: {row.done_in_period}  ·  به‌موقع: {row.on_time_done}"
+            f"  ·  دیر: {row.late_done}\n"
             f"باز: {row.still_open}  ·  عقب‌افتاده: {row.overdue}"
         )
         blocks.append(f"<blockquote>{body}</blockquote>")

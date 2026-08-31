@@ -43,7 +43,13 @@ def _store(tmp_path: Path) -> TaskStore:
     return store
 
 
-def _log(store: TaskStore, message_id: int, text: str, user_id: int = 42, update_id: int | None = None) -> None:
+def _log(
+    store: TaskStore,
+    message_id: int,
+    text: str,
+    user_id: int = 42,
+    update_id: int | None = None,
+) -> None:
     store.log_inbox(
         telegram_update_id=update_id or (10_000 + message_id),
         chat_id=GROUP,

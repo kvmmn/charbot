@@ -201,7 +201,12 @@ def upsert_entries(store, new: list[GlossaryEntry]) -> list[GlossaryEntry]:
         old = by.get(key)
         if old:
             aliases = list({*old.aliases, *e.aliases})
-            by[key] = GlossaryEntry(kind=e.kind or old.kind, en=e.en or old.en, fa=e.fa or old.fa, aliases=aliases)
+            by[key] = GlossaryEntry(
+                kind=e.kind or old.kind,
+                en=e.en or old.en,
+                fa=e.fa or old.fa,
+                aliases=aliases,
+            )
         else:
             by[key] = e
     merged = list(by.values())
@@ -209,7 +214,9 @@ def upsert_entries(store, new: list[GlossaryEntry]) -> list[GlossaryEntry]:
     return merged
 
 
-def apply_to_open_tasks(store, group_id: int, entries: list[GlossaryEntry]) -> list[tuple[int, str, str]]:
+def apply_to_open_tasks(
+    store, group_id: int, entries: list[GlossaryEntry]
+) -> list[tuple[int, str, str]]:
     """Rewrite alias spellings in open titles/descriptions."""
     changed: list[tuple[int, str, str]] = []
     if not entries:

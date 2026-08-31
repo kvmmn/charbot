@@ -1,12 +1,11 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from charbot.formatting import format_task, format_task_list
 from charbot.store import Task, TaskStatus
-from datetime import datetime, timezone
 
 
 def _task(**kw):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     base = dict(
         id=3,
         group_id=-1,

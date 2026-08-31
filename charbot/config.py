@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class BotMode(str, Enum):
+class BotMode(StrEnum):
     POLLING = "polling"
     WEBHOOK = "webhook"
 

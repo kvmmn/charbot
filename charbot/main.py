@@ -6,8 +6,9 @@ import argparse
 import logging
 import re
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request, Response

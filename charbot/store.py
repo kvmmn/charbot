@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from enum import Enum
+from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
 import psycopg
@@ -26,14 +27,16 @@ KNOWN_GROUP_CHAT_ID = -1002781646107
 KNOWN_GROUP_TITLE = "X-Chaharsotoon"
 SHEY_SLUG = "shey"
 SHEY_NAME = "SHEY"
-HAMED_ROLE_SUMMARY = "\u0645\u062f\u06cc\u0631\u0639\u0627\u0645\u0644\u060c \u0633\u0631\u067e\u0631\u0633\u062a \u0637\u0631\u0627\u062d\u06cc\u060c \u0637\u0631\u0627\u062d"
-KAWE_ROLE_SUMMARY = "\u0631\u0626\u06cc\u0633 \u0647\u06cc\u0626\u062a \u0645\u062f\u06cc\u0631\u0647\u061b remote \u0628\u0631\u0644\u06cc\u0646\u061b \u0647\u0645\u0627\u0647\u0646\u06af\u06cc\u060c \u0645\u0634\u0627\u0648\u0631\u0647\u060c AM/client\u060c PMO\u060c tech/AI"
-GHAZAL_NOTE = "\u06a9\u0627\u0631\u0645\u0646\u062f \u0645\u0627\u0631\u06a9\u062a\u06cc\u0646\u06af\u060c \u0628\u0631\u0646\u062f\u06cc\u0646\u06af\u060c \u0637\u0631\u0627\u062d\u06cc \u0648 \u0627\u062c\u0631\u0627"
+HAMED_ROLE_SUMMARY = "مدیرعامل، سرپرست طراحی، طراح"
+KAWE_ROLE_SUMMARY = (
+    "رئیس هیئت مدیره؛ remote برلین؛ هماهنگی، مشاوره، AM/client، PMO، tech/AI"
+)
+GHAZAL_NOTE = "کارمند بازاریابی، برندینگ، طراحی و اجرا"
 SEARCH_PATH = "identity, work, comms, ops, public"
 SEARCH_PATH_OPTIONS = "identity,work,comms,ops,public"
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
     DONE = "done"
@@ -270,11 +273,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 """
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _dt_to_str(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat()
+    return dt.astimezone(UTC).isoformat()
 
 
 def _new_id() -> str:
@@ -284,7 +287,7 @@ def _new_id() -> str:
 def _as_dt(value: Any) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
     return datetime.fromisoformat(str(value))
 
@@ -398,7 +401,7 @@ class _AdaptConn:
 
 def store_from_settings(settings: Any) -> TaskStore:
     database_url = str(getattr(settings, "database_url", "") or "").strip()
-    database_path = Path(getattr(settings, "database_path"))
+    database_path = Path(settings.database_path)
     if database_url:
         return TaskStore(db_path=database_path, dsn=database_url)
     return TaskStore(database_path)
@@ -645,8 +648,12 @@ class TaskStore:
             JOIN identity.organizations o ON o.id = p.organization_id AND o.slug = ?
             ON CONFLICT (provider, provider_user_id) DO UPDATE SET
                 person_id = EXCLUDED.person_id,
-                username = COALESCE(EXCLUDED.username, identity.person_identities.username),
-                display_name = COALESCE(EXCLUDED.display_name, identity.person_identities.display_name),
+                username = COALESCE(
+                    EXCLUDED.username, identity.person_identities.username
+                ),
+                display_name = COALESCE(
+                    EXCLUDED.display_name, identity.person_identities.display_name
+                ),
                 updated_at = EXCLUDED.updated_at
             """,
             (ORG_SLUG,),
@@ -665,7 +672,9 @@ class TaskStore:
             WHERE op.telegram_user_id IS NOT NULL
             ON CONFLICT (provider, provider_user_id) DO UPDATE SET
                 username = COALESCE(EXCLUDED.username, identity.person_identities.username),
-                display_name = COALESCE(EXCLUDED.display_name, identity.person_identities.display_name),
+                display_name = COALESCE(
+                    EXCLUDED.display_name, identity.person_identities.display_name
+                ),
                 updated_at = EXCLUDED.updated_at
             """,
             (ORG_SLUG,),
@@ -713,7 +722,7 @@ class TaskStore:
                 o.id,
                 g.id,
                 CASE
-                  WHEN t.title ILIKE '%\u0634\u06cc%' OR COALESCE(t.description, '') ILIKE '%\u0634\u06cc%'
+                  WHEN t.title ILIKE '%شی%' OR COALESCE(t.description, '') ILIKE '%شی%'
                     OR t.title ILIKE '%SHEY%' OR COALESCE(t.description, '') ILIKE '%SHEY%'
                   THEN proj.id
                   ELSE NULL

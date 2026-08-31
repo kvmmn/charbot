@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType, ParseMode
@@ -18,6 +18,7 @@ from telegram.ext import (
     filters,
 )
 
+from charbot.agent import run_colleague
 from charbot.buttons import (
     choice_means_changed,
     choice_means_done,
@@ -28,6 +29,15 @@ from charbot.buttons import (
 )
 from charbot.config import Settings
 from charbot.formatting import HELP_TEXT, format_task, format_task_list
+from charbot.intent import (
+    CALLBACK_ID_PERSON,
+    PERSON_CALLBACK_ID,
+    SpeechAct,
+    SpeechActKind,
+    classify_speech_act,
+    may_create_task,
+    must_reply,
+)
 from charbot.members import (
     MEMBER_BY_KEY,
     find_member_in_text,
@@ -43,17 +53,6 @@ from charbot.nlp import (
     parse_natural_language,
     parse_task_command,
 )
-from charbot.understand import clean_work_text, extract_task
-from charbot.agent import run_colleague
-from charbot.intent import (
-    CALLBACK_ID_PERSON,
-    PERSON_CALLBACK_ID,
-    SpeechAct,
-    SpeechActKind,
-    classify_speech_act,
-    may_create_task,
-    must_reply,
-)
 from charbot.report import (
     berlin_today,
     month_bounds,
@@ -62,6 +61,7 @@ from charbot.report import (
     week_bounds,
 )
 from charbot.store import Task, TaskStore
+from charbot.understand import clean_work_text, extract_task
 from charbot.voice import (
     ASR_FAIL_FA,
     EDIT_WAIT_FA,
@@ -473,7 +473,10 @@ def _maybe_map_speaker(store: TaskStore, user) -> str | None:
 async def _ask_missing_roles(bot, store: TaskStore, chat_id: int) -> None:
     missing = [k for k in _missing_roles(store) if not _role_saved(store, k)]
     if not missing:
-        await bot.send_message(chat_id=chat_id, text="نقش هر چهار نفر ثبت شد. بعد می‌رویم سراغ کارهای جاری.")
+        await bot.send_message(
+            chat_id=chat_id,
+            text="نقش هر چهار نفر ثبت شد. بعد می‌رویم سراغ کارهای جاری.",
+        )
         return
     parts = []
     for key in missing:
@@ -586,7 +589,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _reject_if_not_allowed(update, settings):
         return
     await update.effective_message.reply_text(
-        "سلام، من چاربات هستم. هماهنگ‌کننده چهارستون.\n/help را بزن یا همین‌جا حرف بزن، صدا یا عکس بفرست.",
+        "سلام، من چاربات هستم. هماهنگ‌کننده چهارستون.\n"
+        "/help را بزن یا همین‌جا حرف بزن، صدا یا عکس بفرست.",
     )
 
 
@@ -1148,7 +1152,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
                 await message.reply_text(result.reply)
             return
 
-        if addressed and any(g in raw for g in ("سلام", "هی", "درود", "خوبی", "ازگل")) and len(raw) < 40:
+        greet = ("سلام", "هی", "درود", "خوبی", "ازگل")
+        if addressed and any(g in raw for g in greet) and len(raw) < 40:
             await message.reply_text("جان، بگو.")
             return
 
@@ -1177,7 +1182,11 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             store.set_kv("dialog", "work")
             if mapping:
                 store.set_person_fact(
-                    mapping.member_key, "notes", "latest_work", raw[:4000], source=mapping.member_key
+                    mapping.member_key,
+                    "notes",
+                    "latest_work",
+                    raw[:4000],
+                    source=mapping.member_key,
                 )
                 store.log_person_event(
                     mapping.member_key,
@@ -1236,7 +1245,10 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         task = store.assign_task(parsed.task_id, group_id, parsed.assignee_key)
         if task:
             await message.reply_text(
-                f"Assigned #{task.id} → {member_display(parsed.assignee_key)}.\n{format_task(task)}",
+                (
+                    f"Assigned #{task.id} → {member_display(parsed.assignee_key)}.\n"
+                    f"{format_task(task)}"
+                ),
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -1302,13 +1314,13 @@ async def setup_nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     if last:
         try:
             when = datetime.fromisoformat(last)
-            if datetime.now(timezone.utc) - when < timedelta(hours=6):
+            if datetime.now(UTC) - when < timedelta(hours=6):
                 return
         except ValueError:
             pass
     try:
         await _ask_missing_roles(context.bot, store, gid)
-        store.set_kv("last_role_ask", datetime.now(timezone.utc).isoformat())
+        store.set_kv("last_role_ask", datetime.now(UTC).isoformat())
     except Exception:
         logger.exception("setup nudge failed")
 
@@ -1624,7 +1636,10 @@ def build_application(settings: Settings, store: TaskStore) -> Application:
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_natural_language))
     app.add_handler(
-        MessageHandler(filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, handle_media)
+        MessageHandler(
+            filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL,
+            handle_media,
+        )
     )
 
     if app.job_queue:

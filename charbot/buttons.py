@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 # callback_data: kind:choice:id  (Telegram limit 64 bytes)
 _CHOICE_RE = re.compile(r"^[a-z]{1,12}$")

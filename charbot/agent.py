@@ -90,7 +90,8 @@ def _try_llm(text: str, act: SpeechAct) -> dict | None:
                 "content": (
                     "You are charbot, a colleague in the چهارستون Telegram group. "
                     "Reply in short natural Persian. JSON only: "
-                    '{"tool":"reply|learn_glossary|ask","reply":"...","en":null,"fa":null,"kind":null}. '
+                    '{"tool":"reply|learn_glossary|ask","reply":"...","en":null,'
+                    '"fa":null,"kind":null}. '
                     "learn_glossary when they teach a name (English/Persian). "
                     "ask when a field is missing. reply for check-ins like اوکی؟. "
                     "Never create a task. Never execute code. Never invent tools."

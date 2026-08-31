@@ -12,9 +12,11 @@ from charbot.voice import (
     summarize_fa,
 )
 
-
 GROUP = -1002781646107
-TRANSCRIPT = "ببین من یه کار دیگه هم انجام میدم و اون براورد مالی پروژه هست که در ابتدای پروژه باید انجام بشه"
+TRANSCRIPT = (
+    "ببین من یه کار دیگه هم انجام میدم و اون براورد مالی پروژه هست "
+    "که در ابتدای پروژه باید انجام بشه"
+)
 
 
 def test_is_voice_question() -> None:
@@ -55,7 +57,11 @@ def test_persist_and_recall_voice(tmp_path: Path) -> None:
             "SELECT id FROM messages WHERE telegram_message_id = 1944"
         ).fetchone()
         mid = int(row["id"])
-        conn.execute("UPDATE messages SET person_id = (SELECT id FROM people WHERE slug = 'saman') WHERE id = ?", (mid,))
+        conn.execute(
+            "UPDATE messages SET person_id = "
+            "(SELECT id FROM people WHERE slug = 'saman') WHERE id = ?",
+            (mid,),
+        )
 
     summary, rid = persist_transcript(
         store,

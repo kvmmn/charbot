@@ -483,7 +483,9 @@ def confirmation_prompt(
     return f"{quote_transcript_html(transcript)}\n{mention} {CONFIRM_ASK_FA}"
 
 
-def reask_prompt(transcript: str, member_key: str | None = None, store: TaskStore | None = None) -> str:
+def reask_prompt(
+    transcript: str, member_key: str | None = None, store: TaskStore | None = None
+) -> str:
     mention = mention_for_member(store, member_key) if member_key else ""
     ask = f"{mention} {REASK_FA}".strip() if mention else REASK_FA
     return f"{quote_transcript_html(transcript)}\n{ask}"

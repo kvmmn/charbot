@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum
+from enum import StrEnum
 
 from charbot.members import resolve_member_name
 
@@ -13,7 +13,7 @@ from charbot.members import resolve_member_name
 _PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 
-class NLIntent(str, Enum):
+class NLIntent(StrEnum):
     CREATE_TASK = "create_task"
     ASSIGN = "assign"
     SET_DUE = "set_due"

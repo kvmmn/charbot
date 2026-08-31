@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from charbot.glossary import is_learn_utterance
 from charbot.members import find_member_in_text
 from charbot.voice import is_voice_confirmation
 
 
-class SpeechActKind(str, Enum):
+class SpeechActKind(StrEnum):
     LIST_TASKS = "list_tasks"
     QUERY_ROLE = "query_role"
     CREATE_TASK = "create_task"
@@ -24,7 +24,7 @@ class SpeechActKind(str, Enum):
 
 
 # Back-compat aliases used by older call sites.
-class UtteranceKind(str, Enum):
+class UtteranceKind(StrEnum):
     QUESTION = "question"
     LIST_MY_WORK = "list_my_work"
     CONFIRM = "confirm"

@@ -69,6 +69,7 @@ def test_extract_and_rewrite_gti(tmp_path: Path) -> None:
 
 def test_learn_handler_before_silent_question_branch() -> None:
     import inspect
+
     import charbot.bot as bot
 
     src = inspect.getsource(bot.handle_natural_language)
