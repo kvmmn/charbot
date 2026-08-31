@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from charbot.nlp import (
 from charbot.understand import clean_work_text, extract_task
 from charbot.store import Task, TaskStore
 from charbot.voice import (
+    ASR_FAIL_FA,
     answer_voice_question,
     is_voice_question,
     media_dest,
@@ -1032,21 +1034,35 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         user = update.effective_user
         member_key = _maybe_map_speaker(store, user)
         dest = media_dest(store, msg.chat_id, msg.message_id, kind)
-        try:
-            result = await process_incoming_voice(
-                store=store,
-                bot=context.bot,
-                chat_id=msg.chat_id,
-                message_id=msg.message_id,
-                file_id=getattr(media, "file_id", None),
-                kind=kind,
-                member_key=member_key,
-                existing_path=str(dest) if dest.is_file() else None,
-            )
-            await msg.reply_text(result.reply)
-        except Exception:
-            logger.exception("voice pipeline failed")
-            await msg.reply_text("صدا را گرفتم ولی نتوانستم پیاده‌اش کنم.")
+        file_id = getattr(media, "file_id", None)
+        existing = str(dest) if dest.is_file() else None
+        chat_id = msg.chat_id
+        message_id = msg.message_id
+        bot = context.bot
+
+        async def _finish_voice() -> None:
+            try:
+                result = await process_incoming_voice(
+                    store=store,
+                    bot=bot,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    file_id=file_id,
+                    kind=kind,
+                    member_key=member_key,
+                    existing_path=existing,
+                )
+                await msg.reply_text(result.reply)
+            except Exception as exc:
+                logger.exception("voice pipeline failed")
+                text = str(exc).strip()
+                try:
+                    await msg.reply_text(text if "نتونستم" in text else ASR_FAIL_FA)
+                except Exception:
+                    logger.exception("voice fail reply failed")
+
+        asyncio.create_task(_finish_voice())
+        return
     elif msg.photo:
         await msg.reply_text("عکس را گرفتم. می‌خوانمش و اگر کار یا تصمیم باشد ثبت می‌کنم.")
     elif msg.document:

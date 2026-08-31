@@ -91,3 +91,122 @@ def test_bot_handlers_are_unique() -> None:
     assert src.count("async def handle_natural_language") == 1
     assert src.count("async def handle_media") == 1
     assert "کارهای باز ثبت شد. روی نقش گیر نمی‌کنم" not in src
+
+
+def test_http_asr_url_and_model(monkeypatch) -> None:
+    from charbot.voice import http_asr_model, http_asr_url
+
+    assert http_asr_url("https://api.openai.com/v1") == (
+        "https://api.openai.com/v1/audio/transcriptions"
+    )
+    assert http_asr_url("https://api.openai.com/v1/chat/completions") == (
+        "https://api.openai.com/v1/audio/transcriptions"
+    )
+    monkeypatch.setenv("CHARBOT_WHISPER_MODEL", "tiny")
+    monkeypatch.delenv("CHARBOT_ASR_MODEL", raising=False)
+    assert http_asr_model() == "whisper-1"
+    monkeypatch.setenv("CHARBOT_ASR_MODEL", "whisper-large-v3")
+    assert http_asr_model() == "whisper-large-v3"
+
+
+def test_transcribe_http_fallback(tmp_path, monkeypatch) -> None:
+    import json
+
+    from charbot import voice
+
+    audio = tmp_path / "voice.ogg"
+    audio.write_bytes(b"OggSfake")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("CHARBOT_LLM_BASE_URL", "https://api.openai.com/v1")
+    local_called = {"n": 0}
+
+    def _local(*_a, **_k):
+        local_called["n"] += 1
+        raise AssertionError("local ASR must not run when HTTP credentials exist")
+
+    monkeypatch.setattr(voice, "_transcribe_faster_whisper", _local)
+
+    captured: dict = {}
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return json.dumps({"text": "salam from api"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        return FakeResp()
+
+    monkeypatch.setattr(voice.urllib.request, "urlopen", fake_urlopen)
+    text = voice.transcribe_audio(audio, language="fa")
+    assert text == "salam from api"
+    assert captured["url"].endswith("/audio/transcriptions")
+    assert "test-key" not in captured["url"]
+    assert local_called["n"] == 0
+
+
+def test_transcribe_fails_persian_without_key(tmp_path, monkeypatch) -> None:
+    from charbot import voice
+
+    audio = tmp_path / "voice.ogg"
+    audio.write_bytes(b"OggSfake")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CHARBOT_LLM_API_KEY", raising=False)
+    monkeypatch.setattr(
+        voice,
+        "_transcribe_faster_whisper",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("faster-whisper is not installed")),
+    )
+    try:
+        voice.transcribe_audio(audio)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert str(exc) == voice.ASR_FAIL_FA
+
+
+def test_handle_media_uses_persian_asr_fail() -> None:
+    import inspect
+
+    import charbot.bot as bot
+
+    src = inspect.getsource(bot.handle_media)
+    assert "ASR_FAIL_FA" in src
+
+
+def test_redact_bot_token_in_logs() -> None:
+    from charbot.main import RedactSecretsFilter
+
+    leaked = "HTTP Request: GET https://api.telegram.org/bot123456:AAHplaceholder/getFile"
+    cleaned = RedactSecretsFilter.scrub(leaked)
+    assert "AAHplaceholder" not in cleaned
+    assert "bot<redacted>" in cleaned
+    bearer = RedactSecretsFilter.scrub("Authorization: Bearer abc.def")
+    assert "abc.def" not in bearer
+
+
+def test_missing_key_uses_local(tmp_path, monkeypatch) -> None:
+    from charbot import voice
+
+    audio = tmp_path / "voice.ogg"
+    audio.write_bytes(b"OggSfake")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CHARBOT_LLM_API_KEY", raising=False)
+    monkeypatch.setattr(
+        voice, "_transcribe_faster_whisper", lambda *_a, **_k: "رونوشت محلی"
+    )
+    assert voice.transcribe_audio(audio) == "رونوشت محلی"
+
+
+def test_handle_media_backgrounds_voice() -> None:
+    import inspect
+
+    import charbot.bot as bot
+
+    src = inspect.getsource(bot.handle_media)
+    assert "asyncio.create_task" in src
+    assert "_finish_voice" in src

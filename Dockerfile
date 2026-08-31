@@ -11,7 +11,7 @@ COPY pyproject.toml README.md ./
 COPY charbot ./charbot
 COPY schema.sql ./schema.sql
 
-# Skip faster-whisper on Fly (too heavy for a small always-on machine).
+# Skip faster-whisper on Fly (too heavy; voice uses HTTP ASR fallback).
 RUN pip install --no-cache-dir \
       "python-telegram-bot[job-queue]>=21.6,<22" \
       "fastapi>=0.115.0" \

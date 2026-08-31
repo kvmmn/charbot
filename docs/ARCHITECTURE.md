@@ -41,7 +41,7 @@ A task list never prints description. Formatter: `charbot/formatting.py` (Telegr
 
 ## Voice
 
-`charbot/voice.py`: download → transcribe → store on the person + message row → answer from transcript. The Fly image **does not** install `faster-whisper` (too large for the small machine). Voice files can still be stored; full ASR needs a model host or API.
+`charbot/voice.py`: download → transcribe → store on the person + message row → answer from transcript. The Fly image **does not** install `faster-whisper` (too large; it also blocked health checks). Live ASR uses an OpenAI-compatible HTTP endpoint (`CHARBOT_LLM_BASE_URL` + `CHARBOT_LLM_API_KEY` or `OPENAI_API_KEY`). If ASR is unavailable the group gets «نتونستم صدا را بنویسم.» Logs redact Telegram bot tokens.
 
 ## Backup (Grok)
 

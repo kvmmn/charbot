@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -21,6 +22,52 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("charbot")
+
+
+class RedactSecretsFilter(logging.Filter):
+    """Keep bot tokens out of httpx/Telegram URL logs."""
+
+    _bot_url = re.compile(r"https?://api\.telegram\.org/bot[^/\s]+")
+    _bot_path = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+    _bearer = re.compile(r"(Bearer )\S+", re.I)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            text = record.getMessage()
+            record.msg = self.scrub(text)
+            record.args = ()
+        except Exception:
+            pass
+        return True
+
+    @classmethod
+    def scrub(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            value = str(value)
+        value = cls._bot_url.sub("https://api.telegram.org/bot<redacted>", value)
+        value = cls._bot_path.sub("/bot<redacted>", value)
+        value = cls._bearer.sub(r"\1<redacted>", value)
+        return value
+
+
+class RedactSecretsFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return RedactSecretsFilter.scrub(super().format(record))
+
+
+def install_log_redaction() -> None:
+    filt = RedactSecretsFilter()
+    fmt = RedactSecretsFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.addFilter(filt)
+    for handler in root.handlers:
+        handler.addFilter(filt)
+        handler.setFormatter(fmt)
+    for name in ("httpx", "httpcore", "telegram", "telegram.ext", "charbot"):
+        logging.getLogger(name).addFilter(filt)
+
+
+install_log_redaction()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
