@@ -2078,3 +2078,33 @@ class TaskStore:
         with self._conn() as conn:
             row = conn.execute(sql, tuple(params)).fetchone()
         return None if not row else dict(row)
+
+    def list_recent_human_messages(
+        self,
+        chat_id: int,
+        *,
+        exclude_telegram_message_id: int | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Latest inbound human texts in this chat (comms.messages), newest first."""
+        clauses = [
+            "m.telegram_chat_id = ?",
+            "m.direction = 'in'",
+            "m.body IS NOT NULL",
+            "TRIM(m.body) <> ''",
+        ]
+        params: list[Any] = [chat_id]
+        if exclude_telegram_message_id is not None:
+            clauses.append("(m.telegram_message_id IS NULL OR m.telegram_message_id != ?)")
+            params.append(exclude_telegram_message_id)
+        params.append(limit)
+        sql = (
+            "SELECT m.id, m.body, m.telegram_message_id, p.slug AS member_key "
+            "FROM messages m LEFT JOIN people p ON p.id = m.person_id "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY m.id DESC LIMIT ?"
+        )
+        with self._conn() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+

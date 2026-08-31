@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
@@ -32,6 +33,7 @@ from charbot.nlp import (
     parse_natural_language,
     parse_task_command,
 )
+from charbot.understand import clean_work_text, extract_task
 from charbot.store import Task, TaskStore
 from charbot.voice import (
     answer_voice_question,
@@ -143,6 +145,173 @@ def _bot_addressed(message, text: str) -> bool:
     if "thecharbot" in low or "چاربات" in text or "charbot" in low:
         return True
     return False
+
+
+FOLLOWUP_HINTS = ("متوجه شدی", "فهمیدی", "ذخیره کن", "چی شد")
+ASK_WHO_TEXT = "بگو از کی یا از چه کاری می‌پرسی."
+
+
+@dataclass
+class WorkFollowup:
+    task: Task | None = None
+    reply: str | None = None
+    created: bool = False
+    context_text: str | None = None
+
+
+def _should_load_context(raw: str, *, force: bool = False) -> bool:
+    """True for «متوجه شدی / فهمیدی / ذخیره کن / چی شد» (never for role sermons)."""
+    if is_board_overview(raw):
+        return False
+    if any(w in raw for w in _SELF_ROLE_HINTS) or "نقش" in raw:
+        return False
+    if force:
+        return True
+    return any(h in raw for h in FOLLOWUP_HINTS)
+
+
+def _is_followup_only(text: str) -> bool:
+    """Skip short confirm/save prompts when walking back to the work dump."""
+    if not (text or "").strip():
+        return True
+    if is_board_overview(text):
+        return False
+    if parse_natural_language(text).intent == NLIntent.CREATE_TASK:
+        return False
+    if _looks_like_work(text):
+        return False
+    if "نقش" in text:
+        return False
+    return any(h in text for h in FOLLOWUP_HINTS)
+
+
+def load_prior_context(
+    store: TaskStore,
+    *,
+    chat_id: int,
+    raw: str,
+    reply_to_text: str | None = None,
+    current_message_id: int | None = None,
+    force: bool = False,
+) -> tuple[str | None, str | None]:
+    """Previous non-bot human text in this chat, or reply_to_message text."""
+    if not _should_load_context(raw, force=force):
+        return None, None
+    if reply_to_text and reply_to_text.strip() and not _is_followup_only(reply_to_text):
+        return reply_to_text.strip(), None
+    for msg in store.list_recent_human_messages(
+        chat_id,
+        exclude_telegram_message_id=current_message_id,
+        limit=20,
+    ):
+        body = (msg.get("body") or "").strip()
+        if not body or body == raw.strip():
+            continue
+        if _is_followup_only(body):
+            continue
+        return body, msg.get("member_key")
+    return None, None
+
+
+def _similar_open_task(
+    store: TaskStore, group_id: int, title: str, assignee_key: str | None = None
+) -> Task | None:
+    needle = (title or "").strip()
+    if not needle:
+        return None
+    for task in store.list_open_tasks(group_id):
+        other = (task.title or "").strip()
+        if other == needle:
+            return task
+        if needle in other or other in needle:
+            if assignee_key is None or task.assignee_key in (None, assignee_key):
+                return task
+    return None
+
+
+def interpret_work_or_followup(
+    store: TaskStore,
+    *,
+    chat_id: int,
+    raw: str,
+    speaker_key: str | None,
+    speaker_user_id: int | None = None,
+    reply_to_text: str | None = None,
+    current_message_id: int | None = None,
+    addressed: bool = False,
+    force_context: bool = False,
+    today: date | None = None,
+) -> WorkFollowup:
+    """Create/reuse a task from a self-obligation or from prior work context."""
+    del addressed
+    today = today or date.today()
+    context_text, context_key = load_prior_context(
+        store,
+        chat_id=chat_id,
+        raw=raw,
+        reply_to_text=reply_to_text,
+        current_message_id=current_message_id,
+        force=force_context,
+    )
+    understood = extract_task(
+        raw,
+        speaker_key=speaker_key,
+        today=today,
+        context=context_text if context_text and _is_followup_only(raw) else None,
+    )
+    from_current = bool(understood.title) and not _is_followup_only(raw)
+    if not understood.title and context_text:
+        understood = extract_task(
+            context_text,
+            speaker_key=context_key or speaker_key,
+            today=today,
+        )
+        from_current = False
+
+    if understood.confidence == "low" and understood.ask:
+        return WorkFollowup(reply=understood.ask, context_text=context_text)
+
+    title = understood.title
+    description = understood.description
+    due_date = understood.due_date
+    assignee = understood.assignee_key or (
+        speaker_key if from_current else (context_key or speaker_key)
+    )
+    if not title:
+        parsed = parse_natural_language(
+            raw if from_current or not context_text else context_text,
+            today=today,
+            speaker_key=assignee,
+        )
+        if parsed.intent != NLIntent.CREATE_TASK or not parsed.title:
+            return WorkFollowup(context_text=context_text)
+        title = clean_work_text(parsed.title) or parsed.title
+        description = parsed.description
+        due_date = parsed.due_date
+        assignee = parsed.assignee_key or assignee
+
+    existing = _similar_open_task(store, chat_id, title, assignee)
+    if existing:
+        return WorkFollowup(
+            task=existing,
+            reply="نوشته شد.\n" + format_task(existing),
+            created=False,
+            context_text=context_text,
+        )
+    task = store.create_task(
+        group_id=chat_id,
+        title=title,
+        description=description,
+        assignee_key=assignee,
+        due_date=due_date,
+        created_by_user_id=speaker_user_id,
+    )
+    return WorkFollowup(
+        task=task,
+        reply="نوشته شد.\n" + format_task(task),
+        created=True,
+        context_text=context_text,
+    )
 
 
 def _mention_for(store: TaskStore, key: str) -> str:
@@ -593,16 +762,33 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    parsed = parse_natural_language(message.text)
+    addressed = _bot_addressed(message, raw)
     mentioned = bool(message.entities) and any(
         getattr(e, "type", None) in ("mention", "text_mention") for e in message.entities
     )
+    reply_to_text = None
+    if replied and not (getattr(replied, "voice", None) or getattr(replied, "audio", None)):
+        reply_to_text = (replied.text or replied.caption or "").strip() or None
 
+    user = update.effective_user
+    speaker_key = _maybe_map_speaker(store, user)
+    follow = interpret_work_or_followup(
+        store,
+        chat_id=group_id,
+        raw=raw,
+        speaker_key=speaker_key,
+        speaker_user_id=user.id if user else None,
+        reply_to_text=reply_to_text,
+        current_message_id=message.message_id,
+        addressed=addressed,
+    )
+    if follow.reply:
+        await message.reply_text(follow.reply, parse_mode=ParseMode.HTML)
+        return
+
+    parsed = parse_natural_language(message.text, speaker_key=speaker_key)
     if parsed.intent == NLIntent.NONE:
-        user = update.effective_user
-        _maybe_map_speaker(store, user)
         mapping = store.get_user_mapping(user.id) if user else None
-        addressed = _bot_addressed(message, raw)
         wants_mention = any(h in raw for h in MENTION_HINTS)
 
         # Collective role/work ask — answer instantly, no @mention required.
@@ -632,7 +818,32 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             elif "نقش" in raw:
                 await message.reply_text(format_board_overview(store))
             elif addressed:
-                await message.reply_text("بگو از کی یا از چه کاری می‌پرسی.")
+                follow = interpret_work_or_followup(
+                    store,
+                    chat_id=group_id,
+                    raw=raw,
+                    speaker_key=speaker_key,
+                    speaker_user_id=user.id if user else None,
+                    reply_to_text=reply_to_text,
+                    current_message_id=message.message_id,
+                    addressed=True,
+                    force_context=True,
+                )
+                if follow.reply:
+                    await message.reply_text(follow.reply, parse_mode=ParseMode.HTML)
+                    return
+                if follow.context_text and (
+                    _looks_like_work(follow.context_text)
+                    or parse_natural_language(follow.context_text).intent == NLIntent.CREATE_TASK
+                ):
+                    await message.reply_text("گرفتم. اگر کار مشخصی ازش دربیاد جدا می‌نویسم.")
+                    return
+                u = extract_task(
+                    raw,
+                    speaker_key=speaker_key,
+                    context=follow.context_text,
+                )
+                await message.reply_text(u.ask or "مسئول کیست و موعد کی است؟")
             return
 
         if addressed and any(g in raw for g in ("سلام", "هی", "درود", "خوبی", "ازگل")) and len(raw) < 40:
@@ -690,15 +901,22 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
     if parsed.intent == NLIntent.CREATE_TASK and parsed.title:
         user = update.effective_user
-        assignee = None
-        if user:
+        u = extract_task(message.text, speaker_key=speaker_key)
+        if u.confidence == "low" and u.ask:
+            await message.reply_text(u.ask)
+            return
+        title = clean_work_text(u.title or parsed.title) or parsed.title
+        assignee = u.assignee_key
+        if assignee is None and user:
             mapping = store.get_user_mapping(user.id)
             if mapping:
                 assignee = mapping.member_key
         task = store.create_task(
             group_id=group_id,
-            title=parsed.title,
+            title=title,
+            description=u.description or parsed.description,
             assignee_key=assignee,
+            due_date=u.due_date or parsed.due_date,
             created_by_user_id=user.id if user else None,
         )
         await _reply_task_created(update, task)

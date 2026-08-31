@@ -1,132 +1,97 @@
 # charbot
 
-Telegram coordinator bot for **Chaharsotoon (4S)** — task board, assignments, and gentle follow-ups in the private group **X-Chaharsotoon**.
+Telegram coordinator for **Chaharsotoon** (چهارستون). It keeps board work defined, assigned, due, and visible in the company group **X-Chaharsotoon**.
 
-Bot: [@TheCharBot](https://t.me/TheCharBot) (display name: charbot)
+| | |
+|---|---|
+| Bot | [@TheCharBot](https://t.me/TheCharBot) |
+| Production | [chaharsotoon-charbot.fly.dev](https://chaharsotoon-charbot.fly.dev/health) (Fly.io, Frankfurt, webhook) |
+| Data | Neon Postgres (`identity`, `work`, `comms`, `ops`) |
+| Group | X-Chaharsotoon (restricted by `TELEGRAM_GROUP_ID`) |
+
+Tokens, database URLs, and invite links are **never** stored in this repository.
+
+## How it works (for everyone)
+
+Board members talk in Telegram the way they already talk. charbot listens, turns messy speech into a precise record, stores it, and answers in the group.
+
+![Service workflow](docs/charbot-workflow.png)
+
+1. Someone writes, sends a voice note, or asks a question in the group.
+2. Telegram delivers that update to Fly over HTTPS (`POST /telegram/webhook`).
+3. charbot interprets **meaning**, not only keywords: it strips filler, fills title / owner / due / description, and **asks** when something is missing instead of guessing.
+4. People, roles, tasks, and messages are stored in Neon.
+5. The bot replies in the group. Task lists show only **title, owner, due**. Extra detail stays on the record.
+
+```mermaid
+flowchart LR
+  A[X-Chaharsotoon<br/>text · voice · questions] -->|HTTPS webhook| B["@TheCharBot on Fly.io<br/>Frankfurt"]
+  B --> C[Understand<br/>clean · extract · ask if unclear]
+  C --> D[(Neon Postgres<br/>people · tasks · messages)]
+  D --> E[Reply in the group<br/>task cards]
+```
+
+A longer, manager-facing write-up is in [docs/FOR-MANAGERS.md](docs/FOR-MANAGERS.md). Engineers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## What it does
 
-- Create, assign, set due dates, mark done, list open/overdue tasks
-- `/standup` summary for the board (Kawe, Hamed, Saman, Mohammadreza)
-- Natural-language task phrases in **English and Persian**
-- Maps Telegram users to board members (`/whoami`, `/map`)
-- Daily follow-up nudge for overdue/unowned work (not every message)
-- SQLite persistence (survives restarts when `data/` or `/data` volume is mounted)
+- Record work as a task: title, owner, deadline; everything else in description
+- List open / overdue work as compact cards (no software dumps)
+- Remember each person (role, notes, events) — Hamed and Saman roles are already stored and are not re-asked
+- Transcribe voice (local/dev pipeline; Fly image is webhook-only and does not bundle Whisper)
+- Answer in Persian in Telegram; follow the previous message when someone asks «متوجه شدی؟»
+- Weekday backup checks (does **not** steal Telegram `getUpdates` from the live webhook)
 
-## Quick start (local polling)
+Board: Kawe (chair, Berlin), Hamed (CEO / design), Saman (vice chair, execution & ops), Mohammadreza (internal accounting). Ghazal is staff (marketing / branding / design), not board.
+
+## Production
+
+Live mode is **webhook**, not polling.
+
+| Piece | Where |
+|---|---|
+| Process | Fly app `chaharsotoon-charbot`, region `fra`, one always-on machine |
+| Health | `GET https://chaharsotoon-charbot.fly.dev/health` |
+| Webhook | `POST /telegram/webhook` (optional `WEBHOOK_SECRET`) |
+| Database | Neon; `DATABASE_URL` is a Fly secret |
+| Bot token | Fly secret `TELEGRAM_BOT_TOKEN` |
+
+Deploy (maintainers):
+
+```bash
+fly deploy --remote-only --app chaharsotoon-charbot --ha=false
+```
+
+Set or rotate secrets without printing them into git:
+
+```bash
+fly secrets set TELEGRAM_BOT_TOKEN=... DATABASE_URL=... TELEGRAM_GROUP_ID=... \
+  WEBHOOK_URL=https://chaharsotoon-charbot.fly.dev WEBHOOK_SECRET=... \
+  --app chaharsotoon-charbot
+```
+
+Org Deploy Token is enough to create the app. After the app exists, a narrower App Deploy Token is preferred for CI.
+
+## Local development
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e ".[dev]"
-
-cp .env.example .env
-# Edit .env — set TELEGRAM_BOT_TOKEN (from BotFather, never commit it)
-
+cp .env.example .env   # never commit .env
 python -m charbot.main --mode polling
 ```
 
-## Add charbot to X-Chaharsotoon
-
-1. In Telegram, open group **X-Chaharsotoon** → Add members → search **@TheCharBot** → add.
-2. In [@BotFather](https://t.me/BotFather):
-   - `/setprivacy` → choose **@TheCharBot** → **Disable** (bot must read group messages for NL task parsing).
-3. Optional: make charbot a **group admin** if you want cleaner visibility of all messages (not strictly required with privacy disabled).
-4. Send `/start` or `/help` in the group.
-5. Each board member runs `/map Kawe` (or their name) once, or an admin replies to their message: `/map Hamed`.
-
-### Get the group id
-
-After adding the bot, send any message in the group and check logs, or forward a group message to [@userinfobot](https://t.me/userinfobot). Supergroups look like `-100xxxxxxxxxx`.
-
-Set in env:
+Do **not** run local polling against the same bot token while the Fly webhook is registered; Telegram allows one delivery path.
 
 ```bash
-TELEGRAM_GROUP_ID=-100xxxxxxxxxx
-```
-
-When set, charbot refuses other chats.
-
-## Commands
-
-| Command | Example |
-|---------|---------|
-| `/task` | `/task Ship Q3 invoice template` |
-| `/assign` | `/assign 3 Kawe` |
-| `/due` | `/due 3 tomorrow` or `/due 3 2026-03-15` |
-| `/done` | `/done 3` |
-| `/open` | List open tasks |
-| `/overdue` | List overdue tasks |
-| `/standup` | Daily board summary |
-| `/whoami` | Your Telegram → member mapping |
-| `/map` | `/map Saman` or reply + `/map Mohammadreza` |
-| `/help` | Full help |
-
-Natural language examples: `task: Prepare contract`, `assign 2 Hamed`, `done 1`, `open tasks`, `تسک: ارسال فاکتور`.
-
-## Environment variables
-
-See [.env.example](.env.example). Required in production:
-
-| Variable | Description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | From BotFather — **never commit** |
-| `TELEGRAM_GROUP_ID` | X-Chaharsotoon chat id |
-| `BOT_MODE` | `polling` (dev) or `webhook` (prod) |
-| `WEBHOOK_URL` | Public HTTPS base URL (webhook mode) |
-| `DATABASE_PATH` | SQLite file path (use a mounted volume) |
-
-Optional: `WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_GROUP_IDS`, `FOLLOWUP_INTERVAL_HOURS`.
-
-## Production (webhook)
-
-### Docker
-
-```bash
-docker build -t charbot .
-docker run -p 8081:8081 \
-  -e TELEGRAM_BOT_TOKEN=... \
-  -e TELEGRAM_GROUP_ID=... \
-  -e BOT_MODE=webhook \
-  -e WEBHOOK_URL=https://your-host.example \
-  -v charbot-data:/data \
-  charbot
-```
-
-Health: `GET /health` → `{"status":"ok","service":"charbot"}`  
-Webhook: `POST /telegram/webhook`
-
-### Fly.io
-
-```bash
-fly launch --no-deploy
-fly volumes create charbot_data --size 1
-fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_GROUP_ID=... WEBHOOK_URL=https://<app>.fly.dev
-fly deploy
-```
-
-After deploy, Telegram sends updates to `https://<app>.fly.dev/telegram/webhook`.
-
-### Render
-
-Use the Dockerfile or `Procfile` (`web: python -m charbot.main --mode webhook`), set env vars in the dashboard, add a persistent disk at `/data`, and point `WEBHOOK_URL` to your Render URL.
-
-## Tests & CI
-
-```bash
-pip install -e ".[dev]"
 ruff check charbot tests
 pytest
 ```
 
-CI runs on push/PR (lint + tests). Tests do not call Telegram.
-
-## Database migration path
-
-v1 uses SQLite at `DATABASE_PATH`. For a hosted DB later, replace `charbot/store.py` with a Postgres-backed implementation keeping the same method signatures — handlers stay unchanged.
-
 ## Security
 
-- Do not commit `.env`, tokens, or private group invite links.
-- Set `TELEGRAM_GROUP_ID` in production.
-- Use `WEBHOOK_SECRET` so only Telegram can POST to your webhook.
+- Never commit `.env`, Fly tokens, BotFather tokens, or the group invite
+- Restrict the bot with `TELEGRAM_GROUP_ID`
+- Use `WEBHOOK_SECRET` so only Telegram can POST to the webhook
+- Logs must not print tokens (redact `bot<id>:<secret>`)

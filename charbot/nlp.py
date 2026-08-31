@@ -30,6 +30,7 @@ class ParsedNL:
     title: str | None = None
     assignee_key: str | None = None
     due_date: date | None = None
+    description: str | None = None
 
 
 def _normalize(text: str) -> str:
@@ -157,8 +158,14 @@ _LIST_OVERDUE_PATTERNS = [
 ]
 
 
-def parse_natural_language(text: str, today: date | None = None) -> ParsedNL:
+def parse_natural_language(
+    text: str,
+    today: date | None = None,
+    speaker_key: str | None = None,
+) -> ParsedNL:
     """Parse free-form group messages for task intents."""
+    from charbot.understand import clean_work_text, extract_task
+
     raw = text.strip()
     if not raw or raw.startswith("/"):
         return ParsedNL(intent=NLIntent.NONE)
@@ -196,11 +203,137 @@ def parse_natural_language(text: str, today: date | None = None) -> ParsedNL:
         if pat.match(normalized):
             return ParsedNL(intent=NLIntent.LIST_OPEN)
 
+    understood = extract_task(raw, speaker_key=speaker_key, today=today)
+    if understood.title:
+        return ParsedNL(
+            intent=NLIntent.CREATE_TASK,
+            title=understood.title,
+            assignee_key=understood.assignee_key,
+            due_date=understood.due_date,
+            description=understood.description,
+        )
+
+    obligation = extract_self_obligation(raw, today=today)
+    if obligation is not None:
+        return obligation
+
     for pat in _CREATE_PATTERNS:
         m = pat.match(normalized)
         if m:
-            title = m.group(1).strip()
+            title = clean_work_text(m.group(1).strip())
             if len(title) >= 3:
                 return ParsedNL(intent=NLIntent.CREATE_TASK, title=title)
 
     return ParsedNL(intent=NLIntent.NONE)
+
+
+_FA_NUM = {
+    "یک": 1,
+    "دو": 2,
+    "سه": 3,
+    "چهار": 4,
+    "پنج": 5,
+    "شش": 6,
+    "هفت": 7,
+    "هشت": 8,
+    "نه": 9,
+    "ده": 10,
+}
+
+_DUE_IN_TEXT = re.compile(
+    r"تا\s+(\d+|یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده)\s+روز(?:\s*(?:دیگه|دیکه|دیگر))?"
+)
+_MENTION_RE = re.compile(r"@\S+")
+
+
+def _strip_mentions(text: str) -> str:
+    t = _MENTION_RE.sub(" ", text)
+    t = t.replace("چاربات", " ")
+    return _normalize(t)
+
+
+def parse_due_in_text(text: str, today: date | None = None) -> date | None:
+    """Parse relative due phrases like «تا دو روز دیگه» inside a sentence."""
+    today = today or date.today()
+    t = _strip_mentions(text)
+    m = _DUE_IN_TEXT.search(t)
+    if m:
+        raw_n = m.group(1)
+        n = int(raw_n) if raw_n.isdigit() else _FA_NUM.get(raw_n)
+        if n is not None:
+            return today + timedelta(days=n)
+    if re.search(r"تا\s+فردا", t):
+        return today + timedelta(days=1)
+    if re.search(r"تا\s+امروز", t):
+        return today
+    return None
+
+
+def _title_from_obligation(main: str) -> str:
+    main = main.strip(" .،,")
+    m = re.search(r"^(.+?)\s+رو\s+(\S+?)(?:\s+کنم|\s+کنیم|\s+کنه)?$", main)
+    if m:
+        obj = re.sub(r"متعلق به\s+", "", m.group(1).strip())
+        verb = m.group(2).strip()
+        title = f"{verb} {obj}".strip()
+        title = re.sub(r"\s+", " ", title)
+        return title
+    title = re.sub(r"\s+کنم$|\s+کنیم$|\s+کنه$", "", main).strip()
+    return title
+
+
+def extract_self_obligation(text: str, today: date | None = None) -> ParsedNL | None:
+    """«من باید … تا دو روز دیگه» → one CREATE_TASK; extra «اگر…» stays in description."""
+    from charbot.understand import extract_task
+
+    today = today or date.today()
+    t = _strip_mentions(text)
+    if "باید" not in t:
+        return None
+    understood = extract_task(text, today=today)
+    if understood.title:
+        return ParsedNL(
+            intent=NLIntent.CREATE_TASK,
+            title=understood.title,
+            assignee_key=understood.assignee_key,
+            due_date=understood.due_date,
+            description=understood.description,
+        )
+    first_person = bool(re.search(r"من\s+باید", t) or re.search(r"باید\s+.+\s+کن(?:م|یم)\b", t))
+    if not first_person:
+        return None
+
+    due = parse_due_in_text(t, today=today)
+    t = _DUE_IN_TEXT.sub(" ", t)
+    t = re.sub(r"تا\s+فردا", " ", t)
+    t = re.sub(r"تا\s+امروز", " ", t)
+    t = _normalize(t)
+
+    description = None
+    dm = re.search(r"(?:و\s+)?(اگر\s+.+)$", t)
+    if dm:
+        description = dm.group(1).strip()
+        t = t[: dm.start()].strip()
+        description = description.replace("بگم", "بگو").replace("بگیم", "بگو")
+        description = description.strip(" .،,")
+        if description and not description.endswith("."):
+            description += "."
+
+    mm = re.search(r"(?:من\s+)?باید\s+(.+)", t)
+    if not mm:
+        return None
+    main = mm.group(1).strip(" .،,")
+    if len(main) < 3:
+        return None
+    if not any(v in main for v in ("کنم", "کنیم", "کنه", "رو ")) and due is None:
+        return None
+
+    title = _title_from_obligation(main)
+    if len(title) < 3:
+        return None
+    return ParsedNL(
+        intent=NLIntent.CREATE_TASK,
+        title=title,
+        due_date=due,
+        description=description,
+    )
