@@ -104,6 +104,17 @@ Defense in depth:
 
 A named person in a question is **not** a role dump. `کارهای حامد` lists Hamed’s tasks.
 
+## 4b. Colleague loop (agency)
+
+Directed speech uses a small in-process loop, not an MCP server and not a phone stack:
+
+Perceive → **policy gate** (`classify_speech_act`) → **allowlisted tools** (`reply`, `learn_glossary`, `ask`) → Respond.
+
+- `اوکی؟` after teaching is a check-in (did you get it?), not a voice-transcript yes.
+- Tools cannot create tasks. `may_create_task` remains the only insert path.
+- LLM (OpenRouter, optional, 8s timeout) may pick a tool; output is JSON data, never executed as code. If the LLM is down, heuristics still reply. Silence is a class bug.
+- Writes the user explicitly taught (a name) are applied and open titles are rewritten. Task writes stay behind existing confirmations.
+
 ## 5. Voice and ASR models
 
 Fly **does not** install `faster-whisper` (image size / health checks). Transcription is HTTP.
