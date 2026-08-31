@@ -14,3 +14,5 @@ data/
 .mypy_cache/
 .coverage
 htmlcov/
+_run_polling.py
+save-token.sh

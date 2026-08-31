@@ -198,6 +198,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_chat_status ON tasks(telegram_chat_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks(completed_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_status_completed ON tasks(status, completed_at);
 
 CREATE TABLE IF NOT EXISTS task_assignees (
     task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -206,6 +208,7 @@ CREATE TABLE IF NOT EXISTS task_assignees (
     PRIMARY KEY (task_id, person_id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_assignees_person ON task_assignees(person_id);
+CREATE INDEX IF NOT EXISTS idx_task_assignees_person_task ON task_assignees(person_id, task_id);
 
 CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1507,6 +1510,37 @@ class TaskStore:
             ).fetchall()
         return [r["body"] for r in rows]
 
+    def _log_task_event(
+        self,
+        conn: Any,
+        task_id: int,
+        event_type: str,
+        payload: dict | None = None,
+        actor_person_id: str | None = None,
+    ) -> None:
+        if payload is None:
+            stored: Any = None
+        else:
+            stored = Jsonb(payload) if self._dsn else json.dumps(payload, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO task_events (task_id, event_type, payload, actor_person_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (task_id, event_type, stored, actor_person_id, _dt_to_str(_utcnow())),
+        )
+
+    def _actor_person_id(
+        self,
+        conn: Any,
+        *,
+        actor_key: str | None = None,
+        actor_user_id: int | None = None,
+    ) -> str | None:
+        if actor_key:
+            return self._ensure_person(conn, actor_key)
+        return self._person_id_by_telegram(conn, actor_user_id)
+
     def create_task(
         self,
         *,
@@ -1517,6 +1551,11 @@ class TaskStore:
         due_date: date | None = None,
         created_by_user_id: int | None = None,
     ) -> Task:
+        from charbot.intent import is_question_shaped_title
+
+        cleaned = (title or "").strip()
+        if not cleaned or is_question_shaped_title(cleaned):
+            raise ValueError("refused question-shaped task title")
         now = _utcnow()
         now_s = _dt_to_str(now)
         with self._conn() as conn:
@@ -1562,6 +1601,13 @@ class TaskStore:
                     ON CONFLICT (task_id, person_id) DO NOTHING
                     """,
                     (task_id, person_id, now_s),
+                )
+                self._log_task_event(
+                    conn,
+                    task_id,
+                    "assigned",
+                    {"assignee_key": assignee_key},
+                    created_by_person_id,
                 )
             task = self._fetch_task(conn, task_id, group_id)
         assert task is not None
@@ -1615,7 +1661,15 @@ class TaskStore:
             ).fetchall()
         return [_row_to_task(r) for r in rows]
 
-    def assign_task(self, task_id: int, group_id: int, assignee_key: str) -> Task | None:
+    def assign_task(
+        self,
+        task_id: int,
+        group_id: int,
+        assignee_key: str,
+        *,
+        actor_key: str | None = None,
+        actor_user_id: int | None = None,
+    ) -> Task | None:
         now = _dt_to_str(_utcnow())
         with self._conn() as conn:
             row = conn.execute(
@@ -1637,6 +1691,10 @@ class TaskStore:
                 "UPDATE tasks SET updated_at = ? WHERE id = ?",
                 (now, task_id),
             )
+            actor = self._actor_person_id(conn, actor_key=actor_key, actor_user_id=actor_user_id)
+            self._log_task_event(
+                conn, task_id, "assigned", {"assignee_key": assignee_key}, actor
+            )
             return self._fetch_task(conn, task_id, group_id)
 
     def set_due_date(self, task_id: int, group_id: int, due_date: date) -> Task | None:
@@ -1651,14 +1709,43 @@ class TaskStore:
             )
             return self._fetch_task(conn, task_id, group_id)
 
-    def mark_done(self, task_id: int, group_id: int) -> Task | None:
-        return self.set_status(task_id, group_id, TaskStatus.DONE)
+    def mark_done(
+        self,
+        task_id: int,
+        group_id: int,
+        *,
+        actor_key: str | None = None,
+        actor_user_id: int | None = None,
+    ) -> Task | None:
+        return self.set_status(
+            task_id,
+            group_id,
+            TaskStatus.DONE,
+            actor_key=actor_key,
+            actor_user_id=actor_user_id,
+        )
 
-    def set_status(self, task_id: int, group_id: int, status: TaskStatus) -> Task | None:
+    def set_status(
+        self,
+        task_id: int,
+        group_id: int,
+        status: TaskStatus,
+        *,
+        actor_key: str | None = None,
+        actor_user_id: int | None = None,
+    ) -> Task | None:
         now = _utcnow()
         now_s = _dt_to_str(now)
-        completed = now_s if status == TaskStatus.DONE else None
         with self._conn() as conn:
+            current = self._fetch_task(conn, task_id, group_id)
+            if current is None:
+                return None
+            if status == TaskStatus.DONE:
+                completed = (
+                    _dt_to_str(current.completed_at) if current.completed_at else now_s
+                )
+            else:
+                completed = None
             conn.execute(
                 """
                 UPDATE tasks SET status = ?, completed_at = ?, updated_at = ?
@@ -1666,7 +1753,58 @@ class TaskStore:
                 """,
                 (status.value, completed, now_s, task_id, group_id),
             )
+            actor = self._actor_person_id(
+                conn, actor_key=actor_key, actor_user_id=actor_user_id
+            )
+            if status == TaskStatus.DONE and current.status != TaskStatus.DONE:
+                self._log_task_event(conn, task_id, "done", {"status": "done"}, actor)
+            elif (
+                status != TaskStatus.DONE
+                and current.status == TaskStatus.DONE
+            ):
+                self._log_task_event(
+                    conn, task_id, "reopened", {"status": status.value}, actor
+                )
             return self._fetch_task(conn, task_id, group_id)
+
+    def list_group_tasks(self, group_id: int) -> list[Task]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                TASK_SELECT + " WHERE t.telegram_chat_id = ? ORDER BY t.id ASC",
+                (group_id,),
+            ).fetchall()
+        return [_row_to_task(r) for r in rows]
+
+    def list_task_events(self, task_id: int) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, task_id, event_type, payload, actor_person_id, created_at
+                FROM task_events
+                WHERE task_id = ?
+                ORDER BY id ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            payload = r["payload"]
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {"raw": payload}
+            out.append(
+                {
+                    "id": r["id"],
+                    "task_id": r["task_id"],
+                    "event_type": r["event_type"],
+                    "payload": payload,
+                    "actor_person_id": r["actor_person_id"],
+                    "created_at": r["created_at"],
+                }
+            )
+        return out
 
     def upsert_user_mapping(
         self,

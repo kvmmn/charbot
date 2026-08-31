@@ -7,16 +7,25 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
 
+from charbot.buttons import (
+    choice_means_changed,
+    choice_means_done,
+    choice_means_wait,
+    followup_question,
+    parse_callback_data,
+    question_buttons,
+)
 from charbot.config import Settings
 from charbot.formatting import HELP_TEXT, format_task, format_task_list
 from charbot.members import (
@@ -35,16 +44,63 @@ from charbot.nlp import (
     parse_task_command,
 )
 from charbot.understand import clean_work_text, extract_task
+from charbot.intent import (
+    CALLBACK_ID_PERSON,
+    PERSON_CALLBACK_ID,
+    SpeechAct,
+    SpeechActKind,
+    classify_speech_act,
+    may_create_task,
+)
+from charbot.report import (
+    berlin_today,
+    month_bounds,
+    parse_report_request,
+    render_period_report,
+    week_bounds,
+)
 from charbot.store import Task, TaskStore
 from charbot.voice import (
     ASR_FAIL_FA,
+    EDIT_WAIT_FA,
+    LOCKED_FA,
+    WRONG_SPEAKER_FA,
     answer_voice_question,
+    apply_voice_callback,
+    confirmed_prompt,
+    handle_pending_voice_text,
     is_voice_question,
     media_dest,
     process_incoming_voice,
+    resolve_pending_speaker_for_voice,
+    set_pending_confirm_message_id,
+    speaker_may_confirm,
+    voice_confirm_button_rows,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_create_task(store: TaskStore, **kwargs):
+    """Last-line persistence guard. Question-shaped titles never insert."""
+    try:
+        return store.create_task(**kwargs)
+    except ValueError:
+        logger.info("refused question-shaped task title")
+        return None
+
+
+
+def _markup(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup | None:
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(text=label, callback_data=data) for label, data in row]
+            for row in rows
+            if row
+        ]
+    )
 
 MENTION_HINTS = ("منشن", "منشن کن", "صداش کن", "صدا کن", "تگ کن", "mention", "صدا بزن")
 WORK_HINTS = (
@@ -231,6 +287,43 @@ def _similar_open_task(
     return None
 
 
+
+def open_tasks_for(store: TaskStore, group_id: int, person_key: str | None) -> list[Task]:
+    tasks = store.list_open_tasks(group_id)
+    if person_key:
+        return [t for t in tasks if t.assignee_key == person_key]
+    return tasks
+
+
+def render_open_tasks(
+    store: TaskStore,
+    group_id: int,
+    act: SpeechAct,
+    speaker_key: str | None,
+) -> str:
+    if act.board_open:
+        return format_task_list(store.list_open_tasks(group_id), header="کارهای باز")
+    person = act.person_key or (speaker_key if act.for_speaker else None)
+    if act.for_speaker or person == speaker_key:
+        header = "کارهای تو"
+    elif person:
+        header = f"کارهای {member_display_fa(person)}"
+    else:
+        header = "کارهای باز"
+    return format_task_list(open_tasks_for(store, group_id, person), header=header)
+
+
+def render_role(store: TaskStore, person_key: str) -> str:
+    role = store.get_person_role(person_key)
+    name = member_display_fa(person_key)
+    if role:
+        return f"{name}: {role}"
+    return (
+        f"نقش {name} را هنوز ندارم. "
+        f"{_mention_for(store, person_key)} یک جمله بگو، ثبت می‌کنم."
+    )
+
+
 def interpret_work_or_followup(
     store: TaskStore,
     *,
@@ -247,6 +340,11 @@ def interpret_work_or_followup(
     """Create/reuse a task from a self-obligation or from prior work context."""
     del addressed
     today = today or date.today()
+    act = classify_speech_act(raw, speaker_key=speaker_key)
+    if act.kind == SpeechActKind.LIST_TASKS:
+        return WorkFollowup(reply=render_open_tasks(store, chat_id, act, speaker_key))
+    if act.kind in (SpeechActKind.QUERY_ROLE, SpeechActKind.ASK_WHICH):
+        return WorkFollowup()
     context_text, context_key = load_prior_context(
         store,
         chat_id=chat_id,
@@ -292,6 +390,12 @@ def interpret_work_or_followup(
         due_date = parsed.due_date
         assignee = parsed.assignee_key or assignee
 
+    payload = raw if from_current else (context_text or raw)
+    if not may_create_task(payload):
+        if understood.ask:
+            return WorkFollowup(reply=understood.ask, context_text=context_text)
+        return WorkFollowup(context_text=context_text)
+
     existing = _similar_open_task(store, chat_id, title, assignee)
     if existing:
         return WorkFollowup(
@@ -300,7 +404,7 @@ def interpret_work_or_followup(
             created=False,
             context_text=context_text,
         )
-    task = store.create_task(
+    task = _safe_create_task(store, 
         group_id=chat_id,
         title=title,
         description=description,
@@ -308,6 +412,8 @@ def interpret_work_or_followup(
         due_date=due_date,
         created_by_user_id=speaker_user_id,
     )
+    if task is None:
+        return WorkFollowup(context_text=context_text)
     return WorkFollowup(
         task=task,
         reply="نوشته شد.\n" + format_task(task),
@@ -585,12 +691,15 @@ async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if mapping:
             assignee_key = mapping.member_key
 
-    task = store.create_task(
+    task = _safe_create_task(store, 
         group_id=group_id,
         title=title,
         assignee_key=assignee_key,
         created_by_user_id=user.id if user else None,
     )
+    if task is None:
+        await update.effective_message.reply_text("این سؤال است، کار نیست.")
+        return
     await _reply_task_created(update, task)
 
 
@@ -711,7 +820,12 @@ async def cmd_standup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         parts.append(format_task_list(overdue, header="عقب‌افتاده"))
     if unowned:
         parts.append(format_task_list(unowned, header="بدون مسئول"))
-    await update.effective_message.reply_text("\n\n".join(parts), parse_mode=ParseMode.HTML)
+    watch = list(overdue) + [t for t in open_tasks if t not in overdue]
+    await update.effective_message.reply_text(
+        "\n\n".join(parts),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_task_followup_markup(watch[:6]),
+    )
 
 
 async def _reply_task_created(update: Update, task: Task) -> None:
@@ -719,6 +833,61 @@ async def _reply_task_created(update: Update, task: Task) -> None:
         "نوشته شد.\n" + format_task(task),
         parse_mode=ParseMode.HTML,
     )
+
+
+def confirmed_task_html(
+    store: TaskStore,
+    *,
+    chat_id: int,
+    speaker_key: str | None,
+    speaker_user_id: int | None,
+    transcript: str,
+) -> str:
+    """Task card or one clarifying ask from a locked transcript. Empty if none."""
+    if classify_speech_act(transcript).kind != SpeechActKind.CREATE_TASK:
+        understood = extract_task(transcript, speaker_key=speaker_key)
+        return (understood.ask or "") if understood.title else ""
+    understood = extract_task(transcript, speaker_key=speaker_key)
+    title = understood.title
+    if not title:
+        return ""
+    if understood.confidence == "high":
+        existing = _similar_open_task(store, chat_id, title, understood.assignee_key)
+        if existing:
+            return format_task(existing)
+        task = _safe_create_task(store, 
+            group_id=chat_id,
+            title=title,
+            description=understood.description,
+            assignee_key=understood.assignee_key,
+            due_date=understood.due_date,
+            created_by_user_id=speaker_user_id,
+        )
+        if task is None:
+            return ""
+        return format_task(task)
+    return understood.ask or ""
+
+
+def compose_voice_lock_reply(
+    store: TaskStore,
+    *,
+    chat_id: int,
+    speaker_key: str | None,
+    speaker_user_id: int | None,
+    transcript: str,
+) -> str:
+    """After the speaker locks the voice text: optional one task, no guessing."""
+    extra = confirmed_task_html(
+        store,
+        chat_id=chat_id,
+        speaker_key=speaker_key,
+        speaker_user_id=speaker_user_id,
+        transcript=transcript,
+    )
+    if extra:
+        return LOCKED_FA + "\n" + extra
+    return LOCKED_FA
 
 
 def _voice_followup(message) -> bool:
@@ -745,13 +914,124 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
     if group_id is None:
         return
 
-    if len(message.text.strip()) < 4:
-        return
-
     store: TaskStore = context.bot_data["store"]
     raw = message.text.strip()
-    named = find_member_in_text(raw)
+    user = update.effective_user
+    speaker_key = _maybe_map_speaker(store, user)
     replied = message.reply_to_message
+    pending = handle_pending_voice_text(
+        store,
+        member_key=speaker_key,
+        text=raw,
+        reply_to_message_id=replied.message_id if replied else None,
+        chat_id=group_id,
+        telegram_message_id=message.message_id,
+    )
+    if pending.action != "ignored":
+        if pending.action in ("confirm", "correct_and_lock"):
+            extra = confirmed_task_html(
+                store,
+                chat_id=group_id,
+                speaker_key=speaker_key,
+                speaker_user_id=user.id if user else None,
+                transcript=pending.transcript or "",
+            )
+            html = confirmed_prompt(
+                speaker_key, pending.transcript or "", store=store
+            )
+            if extra:
+                html = html + "\n" + extra
+            if pending.confirm_message_id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=group_id,
+                        message_id=pending.confirm_message_id,
+                        text=html,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    await message.reply_text(html, parse_mode=ParseMode.HTML)
+            else:
+                await message.reply_text(html, parse_mode=ParseMode.HTML)
+        elif pending.action == "correct":
+            rows = voice_confirm_button_rows(
+                pending.voice_tg_id or 0,
+                transcript=pending.transcript or "",
+            )
+            await message.reply_text(
+                pending.reply,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(rows),
+            )
+        else:
+            await message.reply_text(
+                pending.reply, parse_mode=ParseMode.HTML if pending.html else None
+            )
+        return
+
+    if len(raw) < 4:
+        return
+
+    period = parse_report_request(raw)
+    if period is not None:
+        html = render_period_report(
+            store, group_id, period.start, period.end, label=period.label
+        )
+        rows = question_buttons(
+            "گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0
+        )
+        await message.reply_text(
+            html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows)
+        )
+        return
+
+    act = classify_speech_act(raw, speaker_key=speaker_key)
+    if act.kind == SpeechActKind.LIST_TASKS:
+        await message.reply_text(
+            render_open_tasks(store, group_id, act, speaker_key),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    if act.kind == SpeechActKind.QUERY_ROLE:
+        if is_board_overview(raw):
+            await message.reply_text(format_board_overview(store))
+            return
+        target = act.person_key or (speaker_key if act.for_speaker else None)
+        if target:
+            await message.reply_text(render_role(store, target))
+        else:
+            await message.reply_text(format_board_overview(store))
+        return
+    if act.kind == SpeechActKind.ASK_WHICH:
+        target = act.person_key or speaker_key
+        if not target:
+            await message.reply_text("کارها را می‌خواهی یا نقش را؟ بگو مال کی.")
+            return
+        tasks = open_tasks_for(store, group_id, target)
+        pid = PERSON_CALLBACK_ID.get(target, 0)
+        rows = question_buttons(
+            "کارهاش یا نقشش؟", kind="qa", context="کارهاش نقشش", target_id=pid
+        )
+        if tasks:
+            html = render_open_tasks(
+                store,
+                group_id,
+                SpeechAct(SpeechActKind.LIST_TASKS, person_key=target),
+                speaker_key,
+            )
+            html += "\nاگر نقش می‌خوای، همان دکمه."
+            await message.reply_text(
+                html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows)
+            )
+        else:
+            await message.reply_text(
+                f"{member_display_fa(target)} را کارهاش را می‌خواهی یا نقشش؟",
+                reply_markup=_markup(rows),
+            )
+        return
+
+    named = find_member_in_text(raw)
     if is_voice_question(raw) or _voice_followup(message):
         tg_mid = replied.message_id if replied and (replied.voice or replied.audio) else None
         await message.reply_text(
@@ -773,20 +1053,24 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         reply_to_text = (replied.text or replied.caption or "").strip() or None
 
     user = update.effective_user
-    speaker_key = _maybe_map_speaker(store, user)
-    follow = interpret_work_or_followup(
-        store,
-        chat_id=group_id,
-        raw=raw,
-        speaker_key=speaker_key,
-        speaker_user_id=user.id if user else None,
-        reply_to_text=reply_to_text,
-        current_message_id=message.message_id,
-        addressed=addressed,
-    )
-    if follow.reply:
-        await message.reply_text(follow.reply, parse_mode=ParseMode.HTML)
-        return
+    if speaker_key is None:
+        speaker_key = _maybe_map_speaker(store, user)
+    if act.kind in (SpeechActKind.CREATE_TASK, SpeechActKind.CONFIRM, SpeechActKind.UNKNOWN):
+        follow = interpret_work_or_followup(
+            store,
+            chat_id=group_id,
+            raw=raw,
+            speaker_key=speaker_key,
+            speaker_user_id=user.id if user else None,
+            reply_to_text=reply_to_text,
+            current_message_id=message.message_id,
+            addressed=addressed,
+        )
+        if follow.reply:
+            await message.reply_text(follow.reply, parse_mode=ParseMode.HTML)
+            return
+    else:
+        follow = WorkFollowup()
 
     parsed = parse_natural_language(message.text, speaker_key=speaker_key)
     if parsed.intent == NLIntent.NONE:
@@ -801,24 +1085,24 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         # Questions — always answer, never dump a role sermon.
         # Clear work/role questions in this allowed group do not need an @mention.
         classic_question = any(h in raw for h in QUESTION_HINTS)
-        role_ask = "نقش" in raw or "چیکار" in raw or "چی کار" in raw
+        role_ask = "نقش" in raw and not any(
+            w in raw for w in ("کارها", "تسک", "وظایف")
+        )
         if classic_question or (addressed and role_ask) or (role_ask and _is_question(raw)):
-            target = named
-            if target is None and mapping and any(
-                w in raw for w in ("نقش من", "نقشم", "نقش منو", "منو نمیدون")
-            ):
-                target = mapping.member_key
-            if target:
-                role = store.get_person_role(target)
-                if role:
-                    await message.reply_text(f"{member_display(target)}: {role}")
-                else:
-                    await message.reply_text(
-                        f"نقش {member_display(target)} را هنوز ندارم. "
-                        f"{_mention_for(store, target)} یک جمله بگو، ثبت می‌کنم."
-                    )
-            elif "نقش" in raw:
+            # Role only when they asked نقش/سمت. Named person + question is not a role dump.
+            target = None
+            if role_ask:
+                target = named
+                if target is None and mapping and any(
+                    w in raw for w in ("نقش من", "نقشم", "نقش منو", "منو نمیدون")
+                ):
+                    target = mapping.member_key
+            if target and role_ask:
+                await message.reply_text(render_role(store, target))
+                return
+            elif role_ask and "نقش" in raw:
                 await message.reply_text(format_board_overview(store))
+                return
             elif addressed:
                 follow = interpret_work_or_followup(
                     store,
@@ -901,7 +1185,7 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             return
         return
 
-    if parsed.intent == NLIntent.CREATE_TASK and parsed.title:
+    if parsed.intent == NLIntent.CREATE_TASK and parsed.title and may_create_task(raw):
         user = update.effective_user
         u = extract_task(message.text, speaker_key=speaker_key)
         if u.confidence == "low" and u.ask:
@@ -913,7 +1197,7 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             mapping = store.get_user_mapping(user.id)
             if mapping:
                 assignee = mapping.member_key
-        task = store.create_task(
+        task = _safe_create_task(store, 
             group_id=group_id,
             title=title,
             description=u.description or parsed.description,
@@ -921,6 +1205,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             due_date=u.due_date or parsed.due_date,
             created_by_user_id=user.id if user else None,
         )
+        if task is None:
+            return
         await _reply_task_created(update, task)
         return
 
@@ -948,11 +1234,26 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             await message.reply_text(f"Done #{task.id} ✓")
         return
 
-    if parsed.intent == NLIntent.LIST_OPEN:
-        tasks = store.list_open_tasks(group_id)
-        await message.reply_text(
-            format_task_list(tasks, header="کارهای باز"), parse_mode=ParseMode.HTML
-        )
+    if parsed.intent in (NLIntent.LIST_OPEN, NLIntent.LIST_TASKS, NLIntent.LIST_MINE):
+        if parsed.intent == NLIntent.LIST_OPEN:
+            html = format_task_list(store.list_open_tasks(group_id), header="کارهای باز")
+        else:
+            person = parsed.assignee_key or speaker_key
+            act = SpeechAct(
+                SpeechActKind.LIST_TASKS,
+                person_key=person,
+                for_speaker=person == speaker_key,
+            )
+            html = render_open_tasks(store, group_id, act, speaker_key)
+        await message.reply_text(html, parse_mode=ParseMode.HTML)
+        return
+
+    if parsed.intent == NLIntent.QUERY_ROLE:
+        target = parsed.assignee_key or speaker_key
+        if target:
+            await message.reply_text(render_role(store, target))
+        else:
+            await message.reply_text(format_board_overview(store))
         return
 
     if parsed.intent == NLIntent.LIST_OVERDUE:
@@ -1007,17 +1308,217 @@ async def followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         if not overdue and not unowned:
             continue
 
-        parts = ["<b>پیگیری روزانه</b>"]
+        watch = []
+        seen: set[int] = set()
+        for t in list(overdue) + list(unowned):
+            if t.id in seen:
+                continue
+            seen.add(t.id)
+            watch.append(t)
+        lines = ["یه نگاه به کارهای مانده:"]
         if overdue:
-            parts.append(format_task_list(overdue[:5], header="عقب‌افتاده"))
+            lines.append(format_task_list(overdue[:5], header="عقب‌افتاده"))
         if unowned:
-            parts.append(format_task_list(unowned[:5], header="بدون مسئول"))
+            lines.append(format_task_list(unowned[:5], header="بدون مسئول"))
         try:
             await context.bot.send_message(
-                chat_id=group_id, text="\n".join(parts), parse_mode=ParseMode.HTML
+                chat_id=group_id,
+                text="\n".join(lines),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_task_followup_markup(watch[:6]),
             )
         except Exception:
             logger.exception("Follow-up failed for group %s", group_id)
+
+
+def _task_followup_markup(tasks: list[Task]) -> InlineKeyboardMarkup | None:
+    rows: list[list[tuple[str, str]]] = []
+    seen: set[int] = set()
+    for task in tasks:
+        if task.id in seen:
+            continue
+        seen.add(task.id)
+        ask = followup_question(task.title, member_display_fa(task.assignee_key))
+        rows.extend(
+            question_buttons(
+                ask, kind="td", context=task.title or "", target_id=task.id
+            )
+        )
+    return _markup(rows)
+
+
+def _strip_task_buttons(query, task_id: int) -> InlineKeyboardMarkup | None:
+    message = getattr(query, "message", None)
+    markup = getattr(message, "reply_markup", None) if message else None
+    if not markup:
+        return None
+    needle = f":{task_id}"
+    kept_rows = []
+    for row in markup.inline_keyboard:
+        kept = [btn for btn in row if needle not in (btn.callback_data or "")]
+        if kept:
+            kept_rows.append(kept)
+    return InlineKeyboardMarkup(kept_rows) if kept_rows else None
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    settings: Settings = context.bot_data["settings"]
+    if await _reject_if_not_allowed(update, settings):
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        return
+    parsed = parse_callback_data(query.data)
+    if not parsed:
+        await query.answer()
+        return
+    kind, choice, payload = parsed
+    store: TaskStore = context.bot_data["store"]
+    user = update.effective_user
+    tapper_key = _maybe_map_speaker(store, user)
+    message = query.message
+    chat_id = message.chat_id if message else None
+
+    if kind == "vc":
+        owner = resolve_pending_speaker_for_voice(store, int(payload))
+        if not owner:
+            await query.answer("دیگر لازم نیست.")
+            return
+        if not speaker_may_confirm(
+            store, owner, tapper_key, user.id if user else None
+        ):
+            await query.answer(WRONG_SPEAKER_FA, show_alert=True)
+            return
+        result = apply_voice_callback(
+            store,
+            owner_key=owner,
+            action=choice,
+            telegram_message_id=message.message_id if message else None,
+        )
+        if result.action == "confirm":
+            await query.answer()
+            extra = confirmed_task_html(
+                store,
+                chat_id=chat_id or 0,
+                speaker_key=owner,
+                speaker_user_id=user.id if user else None,
+                transcript=result.transcript or "",
+            )
+            html = confirmed_prompt(owner, result.transcript or "", store=store)
+            if extra:
+                html = html + "\n" + extra
+            try:
+                await query.edit_message_text(
+                    html, parse_mode=ParseMode.HTML, reply_markup=None
+                )
+            except Exception:
+                if message:
+                    await message.reply_text(html, parse_mode=ParseMode.HTML)
+            return
+        if result.action == "wait_edit":
+            await query.answer()
+            if message:
+                await message.reply_text(EDIT_WAIT_FA)
+            return
+        await query.answer()
+        return
+
+    if kind in {"td", "fu"}:
+        if chat_id is None:
+            await query.answer()
+            return
+        task_id = int(payload)
+        if choice_means_done(choice):
+            store.mark_done(
+                task_id,
+                chat_id,
+                actor_key=tapper_key,
+                actor_user_id=user.id if user else None,
+            )
+            await query.answer("انجام شد.")
+            try:
+                await query.edit_message_reply_markup(
+                    reply_markup=_strip_task_buttons(query, task_id)
+                )
+            except Exception:
+                pass
+            return
+        if choice_means_wait(choice):
+            await query.answer("باشه، می‌ماند.")
+            return
+        if choice_means_changed(choice):
+            await query.answer()
+            if message:
+                await message.reply_text("بگو چی عوض شد.")
+            return
+        await query.answer()
+        return
+
+    if kind == "qa":
+        await query.answer()
+        if chat_id is None:
+            return
+        person = CALLBACK_ID_PERSON.get(int(payload))
+        if not person:
+            return
+        if choice == "tasks":
+            html = render_open_tasks(
+                store,
+                chat_id,
+                SpeechAct(SpeechActKind.LIST_TASKS, person_key=person),
+                tapper_key,
+            )
+            try:
+                await query.edit_message_text(html, parse_mode=ParseMode.HTML)
+            except Exception:
+                if message:
+                    await message.reply_text(html, parse_mode=ParseMode.HTML)
+            return
+        if choice == "role":
+            text = render_role(store, person)
+            try:
+                await query.edit_message_text(text)
+            except Exception:
+                if message:
+                    await message.reply_text(text)
+            return
+        return
+
+    if kind == "rp":
+        await query.answer()
+        if chat_id is None:
+            return
+        today = berlin_today()
+        if choice == "week":
+            start, end = week_bounds(today)
+            label = "این هفته"
+        elif choice == "month":
+            start, end = month_bounds(today)
+            label = "این ماه"
+        else:
+            return
+        html = render_period_report(store, chat_id, start, end, today=today, label=label)
+        rows = question_buttons(
+            "گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0
+        )
+        try:
+            await query.edit_message_text(
+                html,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(rows),
+            )
+        except Exception:
+            if message:
+                await message.reply_text(
+                    html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows)
+                )
+        return
+
+    await query.answer()
 
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1051,8 +1552,20 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     kind=kind,
                     member_key=member_key,
                     existing_path=existing,
+                    telegram_user_id=user.id if user else None,
                 )
-                await msg.reply_text(result.reply)
+                rows = voice_confirm_button_rows(
+                    message_id, transcript=result.transcript
+                )
+                sent = await msg.reply_text(
+                    result.reply,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_markup(rows),
+                )
+                if result.member_key and sent is not None:
+                    set_pending_confirm_message_id(
+                        store, result.member_key, sent.message_id
+                    )
             except Exception as exc:
                 logger.exception("voice pipeline failed")
                 text = str(exc).strip()
@@ -1086,6 +1599,7 @@ def build_application(settings: Settings, store: TaskStore) -> Application:
     app.add_handler(CommandHandler("standup", cmd_standup))
     app.add_handler(CommandHandler("whoami", cmd_whoami))
     app.add_handler(CommandHandler("map", cmd_map))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_natural_language))
     app.add_handler(
         MessageHandler(filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, handle_media)

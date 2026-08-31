@@ -104,10 +104,24 @@ def test_http_asr_url_and_model(monkeypatch) -> None:
     )
     monkeypatch.setenv("CHARBOT_WHISPER_MODEL", "tiny")
     monkeypatch.delenv("CHARBOT_ASR_MODEL", raising=False)
-    assert http_asr_model() == "whisper-1"
+    assert http_asr_model() == "gpt-4o-mini-transcribe"
     monkeypatch.setenv("CHARBOT_ASR_MODEL", "whisper-large-v3")
     assert http_asr_model() == "whisper-large-v3"
 
+
+
+
+def test_openrouter_asr_preferred(monkeypatch) -> None:
+    from charbot.voice import OPENROUTER_ASR_FALLBACK_MODEL, OPENROUTER_ASR_MODEL, asr_backends
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "oa-test")
+    monkeypatch.delenv("CHARBOT_ASR_MODEL", raising=False)
+    names_models = [(b.name, b.model) for b in asr_backends()]
+    assert names_models[0] == ("openrouter", OPENROUTER_ASR_MODEL)
+    assert names_models[1] == ("openrouter", OPENROUTER_ASR_FALLBACK_MODEL)
+    assert names_models[-1] == ("openai", "gpt-4o-mini-transcribe")
+    assert all("or-test" != b.model for b in asr_backends())
 
 def test_transcribe_http_fallback(tmp_path, monkeypatch) -> None:
     import json
@@ -157,6 +171,7 @@ def test_transcribe_fails_persian_without_key(tmp_path, monkeypatch) -> None:
     audio.write_bytes(b"OggSfake")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("CHARBOT_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(
         voice,
         "_transcribe_faster_whisper",
@@ -210,3 +225,56 @@ def test_handle_media_backgrounds_voice() -> None:
     src = inspect.getsource(bot.handle_media)
     assert "asyncio.create_task" in src
     assert "_finish_voice" in src
+
+
+def test_transcribe_http_openrouter_falls_back_to_whisper_large(tmp_path, monkeypatch) -> None:
+    import io
+    import json
+    import urllib.error
+
+    from charbot import voice
+
+    audio = tmp_path / "voice.ogg"
+    audio.write_bytes(b"OggSfake")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CHARBOT_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("CHARBOT_ASR_MODEL", raising=False)
+    monkeypatch.setattr(
+        voice,
+        "_transcribe_faster_whisper",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("local must not run")),
+    )
+    models: list[str] = []
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return json.dumps({"text": "ok whisper"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        body = req.data or b""
+        marker = b'name="model"'
+        idx = body.find(marker)
+        model = ""
+        if idx != -1:
+            rest = body[idx + len(marker):]
+            rest = rest.split(b"\r\n\r\n", 1)[-1]
+            model = rest.split(b"\r\n", 1)[0].decode()
+        models.append(model)
+        if model != voice.OPENROUTER_ASR_FALLBACK_MODEL:
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", hdrs=None, fp=io.BytesIO(b"{}")
+            )
+        return FakeResp()
+
+    monkeypatch.setattr(voice.urllib.request, "urlopen", fake_urlopen)
+    text_out = voice.transcribe_audio(audio, language="fa")
+    assert text_out == "ok whisper"
+    assert models[0] == voice.OPENROUTER_ASR_MODEL
+    assert models[-1] == voice.OPENROUTER_ASR_FALLBACK_MODEL

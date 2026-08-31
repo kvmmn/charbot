@@ -126,6 +126,15 @@ def extract_task(
         raw = context.strip()
     if not raw:
         return UnderstandResult(confidence="low")
+    from charbot.intent import SpeechActKind, classify_speech_act
+
+    act = classify_speech_act(raw, speaker_key=speaker_key)
+    if act.kind in (
+        SpeechActKind.LIST_TASKS,
+        SpeechActKind.QUERY_ROLE,
+        SpeechActKind.ASK_WHICH,
+    ):
+        return UnderstandResult(confidence="low")
     if _is_role_chatter(raw) and not _looks_like_task_payload(raw):
         return UnderstandResult(confidence="low")
 

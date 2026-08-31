@@ -1,59 +1,159 @@
 # Architecture
 
-## Runtime
+charbot is the Telegram coordinator for **چهارستون** (Chaharsotoon). Production is a single Fly.io machine in Frankfurt that receives Telegram webhooks and stores everything in Neon Postgres.
 
+This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Workflow image: [charbot-workflow.png](charbot-workflow.png).
+
+## 1. High level
+
+```mermaid
+flowchart LR
+  G[X-Chaharsotoon<br/>text · voice · photos · taps] -->|HTTPS webhook| F["Fly.io fra<br/>chaharsotoon-charbot"]
+  F --> I[Speech-act gate]
+  I -->|list / role / report| R[Reply in group]
+  I -->|new work| T[Create task]
+  I -->|voice| V[ASR then confirm]
+  I -->|unsure| Q[Ask with inline buttons]
+  T --> N[(Neon Postgres)]
+  V --> N
+  N --> R
 ```
-Telegram  --HTTPS POST /telegram/webhook-->  Fly (fra)  --SQL-->  Neon Postgres
-                 |                                |
-                 |                                +-- GET /health
-                 +-- secret header WEBHOOK_SECRET
+
+**Invariant:** a question about existing work is never a new task. Classification happens *before* extract/create. The database refuses leftover titles such as `های سامان چی`.
+
+## 2. Runtime
+
+| Piece | Value |
+|---|---|
+| App | `chaharsotoon-charbot` (`fly.toml`) |
+| Region | `fra` (Frankfurt) |
+| Mode | `BOT_MODE=webhook` |
+| Process | `min_machines_running = 1`, `auto_stop_machines = false` |
+| Health | `GET /health` → `{"status":"ok","service":"charbot"}` |
+| Webhook | `POST /telegram/webhook` |
+| Entry | `charbot.main` (FastAPI + python-telegram-bot) |
+| Group | X-Chaharsotoon, gated by `TELEGRAM_GROUP_ID` |
+
+Startup registers the webhook and **must not** drop pending updates. Polling (`python -m charbot.main --mode polling`) is local/dev only. Never call Telegram `getUpdates` against the production token while the webhook is live.
+
+```mermaid
+sequenceDiagram
+  participant TG as Telegram
+  participant Fly as Fly webhook
+  participant Gate as intent.classify_speech_act
+  participant Store as Neon
+  TG->>Fly: update (message / voice / callback)
+  Fly->>Gate: raw Persian text
+  alt LIST_TASKS / QUERY_ROLE / REPORT
+    Gate->>Store: read
+    Store-->>Fly: rows
+    Fly-->>TG: HTML cards
+  else CREATE_TASK
+    Gate->>Store: insert (refuses question-shaped titles)
+    Fly-->>TG: نوشته شد + card
+  else voice
+    Fly->>Fly: HTTP ASR
+    Fly-->>TG: transcript + confirm buttons
+  else unknown / missing fields
+    Fly-->>TG: short question + content-bound inline buttons
+  end
 ```
 
-- App: `chaharsotoon-charbot` (`fly.toml`), `BOT_MODE=webhook`, `min_machines_running = 1`, `auto_stop_machines = false`.
-- Entry: `charbot.main` (FastAPI + python-telegram-bot). Startup registers the webhook; it must **not** drop pending updates.
-- Polling (`python -m charbot.main --mode polling`) is local/dev only. Never run it against the production bot token while the webhook is active.
+## 3. Components (code)
 
-## Understanding path
+| Module | Role |
+|---|---|
+| `charbot/main.py` | FastAPI app, webhook, health, log redaction |
+| `charbot/bot.py` | Telegram handlers, follow-up, voice confirm, buttons |
+| `charbot/intent.py` | **Speech-act gate** — list vs role vs create vs report |
+| `charbot/nlp.py` | Dates, slash commands, `parse_natural_language` (uses the gate first) |
+| `charbot/understand.py` | Colloquial extract: title / owner / due / description, ask if unsure |
+| `charbot/voice.py` | Download, HTTP ASR backends, draft transcript, speaker confirm |
+| `charbot/buttons.py` | 2–4 inline buttons generated from *this* question’s content |
+| `charbot/report.py` | Period performance: done / open / overdue per person |
+| `charbot/store.py` | Neon/SQLite; last-line refuse of question-shaped titles |
+| `charbot/formatting.py` | Telegram HTML task cards (title · owner · due only) |
+| `charbot/members.py` | Board/staff identity, name matching |
 
-`charbot/understand.py` extracts a task from colloquial Persian:
+## 4. Speech-act gate (do not bypass)
 
-- Strip filler
-- Title / description / assignee / due
-- `confidence` + optional `ask` when required fields are missing
-- Optional LLM if `CHARBOT_LLM_BASE_URL` and `CHARBOT_LLM_API_KEY` (or `OPENAI_API_KEY`) are set
+`classify_speech_act(text)` is the only writer of intent. Callers: `parse_natural_language`, `handle_natural_language`, voice lock, follow-up create.
 
-`charbot/nlp.py` still parses dates and commands; create-task titles go through `extract_task`. `charbot/bot.py` uses the previous human message when the current line is “did you get that?” / “save this”.
+| Meaning | Kind | Example |
+|---|---|---|
+| Inventory of work | `LIST_TASKS` | `کارهای سامان چی؟` `کارهای من چی بودن؟` |
+| Board open list | `LIST_TASKS` board_open | `کارهای باز` |
+| Job title | `QUERY_ROLE` | `نقش حامد چیه؟` (and **not** if `کارها` is present) |
+| Period report | `REPORT` | `گزارش این هفته` |
+| New work imperative | `CREATE_TASK` | `قرارداد حامد را تا فردا بررسی کن` |
+| Ambiguous «چیکار می‌کنه» | `ASK_WHICH` | buttons: کارهاش / نقشش |
 
-## Data (Neon)
+Defense in depth:
 
-Schemas (see `schema.sql`):
+1. Classifier runs **before** `extract_task`.
+2. `may_create_task()` must be true for any insert path.
+3. `store.create_task` raises if the title looks like a stripped question (`های …`, `؟`, inventory morphology).
+4. Tests in `tests/test_intent.py` (table, not one sentence).
+
+A named person in a question is **not** a role dump. `کارهای حامد` lists Hamed’s tasks.
+
+## 5. Voice and ASR models
+
+Fly **does not** install `faster-whisper` (image size / health checks). Transcription is HTTP.
+
+Preference order (`charbot/voice.py` `asr_backends()`):
+
+| Order | When | Endpoint | Model | Why |
+|---|---|---|---|---|
+| 1 | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/audio/transcriptions` | `deepgram/nova-3` | Dedicated Persian (`language=fa`), ~$0.0043/min |
+| 2 | same key | same | `openai/whisper-large-v3` | Cheap multilingual fallback (~$0.0005/min via OpenRouter) |
+| 3 | `OPENAI_API_KEY` | `https://api.openai.com/v1/audio/transcriptions` | `gpt-4o-mini-transcribe` | Last resort on the existing OpenAI key |
+
+Always send `language=fa`. Whisper-family calls also send a glossary prompt (چهارستون، شی/SHEY, names, airports). Deepgram rejects that prompt field, so it is omitted for Nova-3.
+
+Override first OpenRouter slug with `CHARBOT_ASR_MODEL` only when it contains `/` (full OpenRouter id).
+
+**Product rule:** ASR text is a draft. Reply to the speaker with the full transcript in `<blockquote>`, content-bound buttons («همین بود» / «این را اصلاح می‌کنم»). Wrong user tapping confirm is rejected. Tasks are created only after confirm.
+
+Voice work is `asyncio.create_task` so `/health` is not blocked.
+
+## 6. Data (Neon)
+
+Schemas (`schema.sql`):
 
 | Schema | Contents |
 |---|---|
 | `identity` | organizations, groups, people, roles, memories, events |
-| `work` | projects (SHEY), tasks, assignees, task events |
+| `work` | projects (SHEY), tasks, assignees, task events (`completed_at` on done) |
 | `comms` | messages, message_media, lessons |
 | `ops` | settings, migrations |
 
-Public views keep older names working. `search_path`: `identity, work, comms, ops, public`.
+`search_path`: `identity, work, comms, ops, public`. Assignee is `work.task_assignees` + `identity.people.slug`, not a column on `tasks`.
 
-A task list never prints description. Formatter: `charbot/formatting.py` (Telegram HTML `<blockquote>` cards).
+Period reports (`charbot/report.py`) count per person: done / still open / overdue, from assignee + due + `completed_at`, Berlin timezone. Weekly digest: Friday 12:00 Europe/Berlin.
 
-## Voice
+## 7. UX
 
-`charbot/voice.py`: download → transcribe → store on the person + message row → answer from transcript. The Fly image **does not** install `faster-whisper` (too large; it also blocked health checks). Live ASR uses an OpenAI-compatible HTTP endpoint (`CHARBOT_LLM_BASE_URL` + `CHARBOT_LLM_API_KEY` or `OPENAI_API_KEY`). If ASR is unavailable the group gets «نتونستم صدا را بنویسم.» Logs redact Telegram bot tokens.
+- Telegram group: short natural Persian. Real `@mentions`. No `گرفتم ثبت شد`.
+- Task cards: title, owner, due only.
+- Questions to humans: inline buttons generated from **that** question, not a frozen global menu. Tap completes; free text is for corrections.
+- Hamed and Saman roles are stored; never re-ask.
 
-## Backup (Grok)
+## 8. Secrets (never git)
 
-Weekday routines may restart a dead process and drain **Neon unprocessed** rows. They must **never** call Telegram `getUpdates` (that steals the webhook/polling stream).
-
-## Secrets
-
-| Name | Where |
+| Name | Use |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Fly secret / local env file, never git |
-| `DATABASE_URL` | Fly secret / local `.env` |
-| `WEBHOOK_SECRET` | Fly secret |
-| `FLY_API_TOKEN` | Operator machine / CI, never git |
+| `TELEGRAM_BOT_TOKEN` | Bot API |
+| `DATABASE_URL` | Neon |
+| `WEBHOOK_SECRET` | Telegram webhook header |
+| `TELEGRAM_GROUP_ID` | Allowed group |
+| `OPENROUTER_API_KEY` | Preferred ASR (+ future routed models) |
+| `OPENAI_API_KEY` | ASR last fallback / optional LLM extract |
+| `CHARBOT_ASR_MODEL` | Optional OpenRouter slug override |
+| `FLY_API_TOKEN` | Deploy only, operator machine |
 
-`.dockerignore` excludes `.venv`, `.git`, `.env`, and `data/`.
+`.dockerignore` excludes `.venv`, `.git`, `.env`, `data/`.
+
+## 9. Backup (Grok routines)
+
+Weekday inbox / morning / afternoon / Friday report. They may read Neon. They must **never** call Telegram `getUpdates`.

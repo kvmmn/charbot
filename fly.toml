@@ -10,6 +10,7 @@ primary_region = "fra"
   WEBHOOK_PATH = "/telegram/webhook"
   HOST = "0.0.0.0"
   CHARBOT_WHISPER_MODEL = "tiny"
+  CHARBOT_ASR_MODEL = "gpt-4o-mini-transcribe"
 
 [http_service]
   internal_port = 8081

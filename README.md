@@ -26,7 +26,7 @@ Board members talk in Telegram the way they already talk. charbot listens, turns
 ```mermaid
 flowchart LR
   A[X-Chaharsotoon<br/>text · voice · questions] -->|HTTPS webhook| B["@TheCharBot on Fly.io<br/>Frankfurt"]
-  B --> C[Understand<br/>clean · extract · ask if unclear]
+  B --> C[Speech-act gate<br/>list · role · create · ask]
   C --> D[(Neon Postgres<br/>people · tasks · messages)]
   D --> E[Reply in the group<br/>task cards]
 ```
@@ -38,9 +38,12 @@ A longer, manager-facing write-up is in [docs/FOR-MANAGERS.md](docs/FOR-MANAGERS
 - Record work as a task: title, owner, deadline; everything else in description
 - List open / overdue work as compact cards (no software dumps)
 - Remember each person (role, notes, events) — Hamed and Saman roles are already stored and are not re-asked
-- Transcribe voice (local/dev pipeline; Fly image is webhook-only and does not bundle Whisper)
+- Classify meaning first: questions about someone’s work **list** that work; they never become a new task
+- Transcribe voice over OpenRouter (`deepgram/nova-3`, then `whisper-large-v3`); speaker must confirm before tasks lock
+- Inline buttons generated from the actual question (not a fixed menu)
+- Period reports (week / month / date range) from assignee, due, and `completed_at`
 - Answer in Persian in Telegram; follow the previous message when someone asks «متوجه شدی؟»
-- Weekday backup checks (does **not** steal Telegram `getUpdates` from the live webhook)
+- Weekday backup checks (do **not** steal Telegram `getUpdates` from the live webhook)
 
 Board: Kawe (chair, Berlin), Hamed (CEO / design), Saman (vice chair, execution & ops), Mohammadreza (internal accounting). Ghazal is staff (marketing / branding / design), not board.
 

@@ -124,6 +124,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_chat_status
 CREATE INDEX IF NOT EXISTS idx_tasks_due_date
     ON work.tasks (due_date);
 
+CREATE INDEX IF NOT EXISTS idx_tasks_completed_at
+    ON work.tasks (completed_at);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status_completed
+    ON work.tasks (status, completed_at);
+
 CREATE TABLE IF NOT EXISTS work.task_assignees (
     task_id bigint NOT NULL REFERENCES work.tasks(id) ON DELETE CASCADE,
     person_id uuid NOT NULL REFERENCES identity.people(id),
@@ -133,6 +139,9 @@ CREATE TABLE IF NOT EXISTS work.task_assignees (
 
 CREATE INDEX IF NOT EXISTS idx_task_assignees_person
     ON work.task_assignees (person_id);
+
+CREATE INDEX IF NOT EXISTS idx_task_assignees_person_task
+    ON work.task_assignees (person_id, task_id);
 
 CREATE TABLE IF NOT EXISTS work.task_events (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -19,6 +19,9 @@ class NLIntent(str, Enum):
     SET_DUE = "set_due"
     MARK_DONE = "mark_done"
     LIST_OPEN = "list_open"
+    LIST_MINE = "list_mine"
+    LIST_TASKS = "list_tasks"
+    QUERY_ROLE = "query_role"
     LIST_OVERDUE = "list_overdue"
     NONE = "none"
 
@@ -123,9 +126,10 @@ def parse_done_command(args: list[str]) -> int | None:
 
 
 _CREATE_PATTERNS = [
-    re.compile(r"^(?:task|تسک|کار)\s*[:\-]?\s*(.+)$", re.IGNORECASE),
-    re.compile(r"^(?:new task|تسک جدید)\s*[:\-]?\s*(.+)$", re.IGNORECASE),
-    re.compile(r"^(?:we need to|باید)\s+(.+)$", re.IGNORECASE),
+    # Separator required. Bare «کار»/«کارهای» must never strip into a junk title.
+    re.compile(r"^(?:task|new task|تسک(?:\s+جدید)?)\s*[:\-]\s*(.+)$", re.IGNORECASE),
+    re.compile(r"^کار\s*[:\-]\s*(.+)$"),
+    re.compile(r"^(?:we need to)\s+(.+)$", re.IGNORECASE),
 ]
 
 _ASSIGN_PATTERNS = [
@@ -150,7 +154,10 @@ _DONE_PATTERNS = [
 ]
 
 _LIST_OPEN_PATTERNS = [
-    re.compile(r"^(?:open tasks?|tasks? open|تسک(?:‌|\s)?های باز|لیست تسک)$", re.IGNORECASE),
+    re.compile(
+        r"^(?:open tasks?|tasks? open|تسک(?:‌|\s)?های باز|لیست تسک|کارهای باز|لیست کارها)$",
+        re.IGNORECASE,
+    ),
 ]
 
 _LIST_OVERDUE_PATTERNS = [
@@ -203,8 +210,27 @@ def parse_natural_language(
         if pat.match(normalized):
             return ParsedNL(intent=NLIntent.LIST_OPEN)
 
+    from charbot.intent import SpeechActKind, classify_speech_act, may_create_task
+
+    act = classify_speech_act(raw, speaker_key=speaker_key)
+    if act.kind == SpeechActKind.LIST_TASKS:
+        if act.board_open:
+            return ParsedNL(intent=NLIntent.LIST_OPEN)
+        person = act.person_key or (speaker_key if act.for_speaker else None)
+        return ParsedNL(intent=NLIntent.LIST_TASKS, assignee_key=person)
+    if act.kind == SpeechActKind.QUERY_ROLE:
+        person = act.person_key or (speaker_key if act.for_speaker else None)
+        return ParsedNL(intent=NLIntent.QUERY_ROLE, assignee_key=person)
+    if act.kind in (
+        SpeechActKind.ASK_WHICH,
+        SpeechActKind.CONFIRM,
+        SpeechActKind.REPORT,
+        SpeechActKind.UNKNOWN,
+    ) and not may_create_task(raw):
+        return ParsedNL(intent=NLIntent.NONE)
+
     understood = extract_task(raw, speaker_key=speaker_key, today=today)
-    if understood.title:
+    if understood.title and may_create_task(raw):
         return ParsedNL(
             intent=NLIntent.CREATE_TASK,
             title=understood.title,
@@ -214,15 +240,16 @@ def parse_natural_language(
         )
 
     obligation = extract_self_obligation(raw, today=today)
-    if obligation is not None:
+    if obligation is not None and may_create_task(raw):
         return obligation
 
-    for pat in _CREATE_PATTERNS:
-        m = pat.match(normalized)
-        if m:
-            title = clean_work_text(m.group(1).strip())
-            if len(title) >= 3:
-                return ParsedNL(intent=NLIntent.CREATE_TASK, title=title)
+    if may_create_task(raw):
+        for pat in _CREATE_PATTERNS:
+            m = pat.match(normalized)
+            if m:
+                title = clean_work_text(m.group(1).strip())
+                if len(title) >= 3:
+                    return ParsedNL(intent=NLIntent.CREATE_TASK, title=title)
 
     return ParsedNL(intent=NLIntent.NONE)
 
