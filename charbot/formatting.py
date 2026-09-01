@@ -1,4 +1,4 @@
-"""Clean task cards for Telegram (title, owner, due only)."""
+"""Clean task cards for Telegram (blockquote, color ring per person)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,22 @@ from html import escape
 
 from charbot.members import member_display_fa
 from charbot.store import Task
+
+# Telegram cannot color the quote bar. A colored ring is the person mark.
+PERSON_MARK = {
+    "kawe": "🔵",
+    "hamed": "🟢",
+    "saman": "🟠",
+    "mohammadreza": "🟡",
+    "ghazal": "🟣",
+}
+UNASSIGNED_MARK = "⚪"
+
+
+def person_mark(key: str | None) -> str:
+    if not key:
+        return UNASSIGNED_MARK
+    return PERSON_MARK.get(key, UNASSIGNED_MARK)
 
 
 def _due_label(d: date | None) -> str:
@@ -19,12 +35,13 @@ def _due_label(d: date | None) -> str:
 
 
 def format_task(task: Task, *, locale_hint: str = "fa") -> str:
-    """One compact card: title, owner, deadline. Description stays on the record."""
+    """One blockquote card: title, then ring + due + owner. Matches group UI."""
     del locale_hint
     title = escape(task.title.strip() or "بدون عنوان")
     owner = escape(member_display_fa(task.assignee_key))
     due = escape(_due_label(task.due_date))
-    return f"<blockquote><b>{title}</b>\n{owner}  ·  {due}</blockquote>"
+    mark = person_mark(task.assignee_key)
+    return f"<blockquote><b>{title}</b>\n{mark} {due} {owner}</blockquote>"
 
 
 def format_task_list(tasks: list[Task], *, header: str) -> str:
