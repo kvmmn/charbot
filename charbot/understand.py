@@ -126,14 +126,16 @@ def extract_task(
         raw = context.strip()
     if not raw:
         return UnderstandResult(confidence="low")
-    from charbot.intent import SpeechActKind, classify_speech_act
+    from charbot.intent import SpeechActKind, classify_speech_act, is_completion_report
 
     act = classify_speech_act(raw, speaker_key=speaker_key)
     if act.kind in (
         SpeechActKind.LIST_TASKS,
         SpeechActKind.QUERY_ROLE,
         SpeechActKind.ASK_WHICH,
-    ):
+        SpeechActKind.REPORT,
+        SpeechActKind.REPORT_DONE,
+    ) or is_completion_report(raw):
         return UnderstandResult(confidence="low")
     if _is_role_chatter(raw) and not _looks_like_task_payload(raw):
         return UnderstandResult(confidence="low")
@@ -221,7 +223,19 @@ def _mask_non_owner_mentions(text: str) -> str:
         t = re.sub(rf"مربوط\s+به\s+{n}", " ", t, flags=re.IGNORECASE)
         t = re.sub(rf"مال\s+{n}", " ", t, flags=re.IGNORECASE)
         t = re.sub(
-            rf"به\s+{n}\s+(?:بگو|بگم|بگیم|بگه|اطلاع|خبر)",
+            rf"به\s+{n}\s+(?:بگو|بگم|بگیم|بگه|اطلاع|خبر|فرستاد)",
+            " ",
+            t,
+            flags=re.IGNORECASE,
+        )
+        t = re.sub(
+            rf"فرستاد(?:م|یم|ه)?\s+برای\s+{n}",
+            " ",
+            t,
+            flags=re.IGNORECASE,
+        )
+        t = re.sub(
+            rf"برای\s+{n}\s+فرستاد",
             " ",
             t,
             flags=re.IGNORECASE,

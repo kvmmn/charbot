@@ -225,6 +225,7 @@ def parse_natural_language(
         SpeechActKind.ASK_WHICH,
         SpeechActKind.CONFIRM,
         SpeechActKind.REPORT,
+        SpeechActKind.REPORT_DONE,
         SpeechActKind.LEARN,
         SpeechActKind.CHECKIN,
         SpeechActKind.UNKNOWN,

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from html import escape as html_escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType, ParseMode
@@ -26,6 +28,7 @@ from charbot.buttons import (
     followup_question,
     parse_callback_data,
     question_buttons,
+    task_pick_buttons,
 )
 from charbot.config import Settings
 from charbot.formatting import HELP_TEXT, format_task, format_task_list
@@ -35,6 +38,7 @@ from charbot.intent import (
     SpeechAct,
     SpeechActKind,
     classify_speech_act,
+    is_completion_report,
     may_create_task,
     must_reply,
 )
@@ -219,6 +223,8 @@ class WorkFollowup:
     reply: str | None = None
     created: bool = False
     context_text: str | None = None
+    completed: bool = False
+    button_rows: list[list[tuple[str, str]]] | None = None
 
 
 def _should_load_context(raw: str, *, force: bool = False) -> bool:
@@ -291,6 +297,184 @@ def _similar_open_task(
     return None
 
 
+CREATE_DRAFT_KEY = "create_draft"
+
+_MATCH_STOP = frozenset(
+    {
+        "من",
+        "رو",
+        "را",
+        "و",
+        "برای",
+        "که",
+        "الان",
+        "این",
+        "آن",
+        "شد",
+        "شده",
+        "دادم",
+        "دادیم",
+        "خودت",
+        "گفته",
+        "بودی",
+        "بوده",
+        "امروزه",
+        "امروز",
+        "دارم",
+        "میدم",
+        "می‌دم",
+        "نه",
+        "تسک",
+        "فعالیت",
+        "جدید",
+        "معرفی",
+        "کنم",
+        "تموم",
+        "تمام",
+        "انجام",
+        "تکمیل",
+        "تحویل",
+        "فرستادم",
+        "فرستادیم",
+        "کارم",
+        "خلاص",
+        "اوکی",
+        "گزارش",
+        "کار",
+        "بود",
+        "است",
+        "هست",
+        "دیگه",
+        "done",
+        "finished",
+        "delivered",
+        "completed",
+    }
+)
+
+
+def save_pending_create_draft(store: TaskStore, speaker_key: str | None, payload: str) -> None:
+    if not speaker_key:
+        return
+    store.set_person_fact(
+        speaker_key, "notes", CREATE_DRAFT_KEY, payload or "1", source="create"
+    )
+
+
+def clear_pending_create_draft(store: TaskStore, speaker_key: str | None) -> None:
+    if not speaker_key:
+        return
+    store.set_person_fact(speaker_key, "notes", CREATE_DRAFT_KEY, "", source="create")
+
+
+def has_pending_create_draft(store: TaskStore, speaker_key: str | None) -> bool:
+    if not speaker_key:
+        return False
+    return bool(store.get_person_fact(speaker_key, "notes", CREATE_DRAFT_KEY))
+
+
+def _content_tokens(text: str) -> set[str]:
+    t = (text or "").replace("\u200c", " ")
+    t = re.sub(r"[؟?!.،,;؛:()\[\]\"']+", " ", t)
+    parts = [p.lower() for p in t.split() if p]
+    return {p for p in parts if p not in _MATCH_STOP and len(p) >= 2}
+
+
+def _rank_open_matches(tasks: list[Task], text: str, *, today: date) -> list[Task]:
+    """Score speaker open tasks by title/description overlap; due-today is a boost."""
+    raw = text or ""
+    utt = _content_tokens(raw)
+    scored: list[tuple[int, Task]] = []
+    for task in tasks:
+        hay = f"{task.title or ''} {task.description or ''}"
+        toks = _content_tokens(hay)
+        overlap = len(utt & toks)
+        sub = sum(1 for tok in toks if len(tok) >= 3 and tok in raw)
+        score = overlap * 2 + min(sub, 3)
+        if task.due_date == today:
+            score += 1
+        title = (task.title or "").strip()
+        if title and len(title) >= 3 and (title in raw or raw in title):
+            score += 3
+        similar = _similar_open_task_title(title, raw)
+        if similar:
+            score += 2
+        if score >= 2:
+            scored.append((score, task))
+    scored.sort(key=lambda item: (-item[0], item[1].id))
+    if not scored:
+        return []
+    if len(scored) == 1:
+        return [scored[0][1]]
+    best, second = scored[0][0], scored[1][0]
+    if best >= second + 2:
+        return [scored[0][1]]
+    return [task for _score, task in scored[:4]]
+
+
+def _similar_open_task_title(title: str, text: str) -> bool:
+    needle = (title or "").strip()
+    hay = (text or "").strip()
+    if not needle or not hay:
+        return False
+    if needle in hay or hay in needle:
+        return True
+    return False
+
+
+def ack_done_fa(title: str) -> str:
+    work = html_escape((title or "کار").strip() or "کار")
+    return f"اوکی. {work} را تکمیل شده زدم."
+
+
+def complete_reported_work(
+    store: TaskStore,
+    *,
+    chat_id: int,
+    raw: str,
+    speaker_key: str | None,
+    speaker_user_id: int | None = None,
+    today: date | None = None,
+) -> WorkFollowup:
+    """Match a completion report to the speaker's open work. Never create."""
+    today = today or date.today()
+    clear_pending_create_draft(store, speaker_key)
+    mine = open_tasks_for(store, chat_id, speaker_key)
+    matches = _rank_open_matches(mine, raw, today=today)
+    if len(matches) == 1:
+        task = store.mark_done(
+            matches[0].id,
+            chat_id,
+            actor_key=speaker_key,
+            actor_user_id=speaker_user_id,
+        )
+        if task:
+            return WorkFollowup(
+                task=task,
+                reply=ack_done_fa(task.title),
+                created=False,
+                completed=True,
+            )
+    ask = "کدام کار را تمام کردی؟"
+    if len(matches) >= 2:
+        shown = matches[:4]
+        return WorkFollowup(
+            reply=ask,
+            created=False,
+            button_rows=task_pick_buttons([(t.title, t.id) for t in shown]),
+        )
+    if not mine:
+        return WorkFollowup(
+            reply="کار بازی روی تو نیست. اگر کار دیگری است بگو کدام.",
+            created=False,
+        )
+    shown = mine[:4]
+    return WorkFollowup(
+        reply=ask,
+        created=False,
+        button_rows=task_pick_buttons([(t.title, t.id) for t in shown]),
+    )
+
 
 def open_tasks_for(store: TaskStore, group_id: int, person_key: str | None) -> list[Task]:
     tasks = store.list_open_tasks(group_id)
@@ -347,6 +531,15 @@ def interpret_work_or_followup(
     act = classify_speech_act(raw, speaker_key=speaker_key)
     if act.kind == SpeechActKind.LIST_TASKS:
         return WorkFollowup(reply=render_open_tasks(store, chat_id, act, speaker_key))
+    if act.kind == SpeechActKind.REPORT_DONE or is_completion_report(raw):
+        return complete_reported_work(
+            store,
+            chat_id=chat_id,
+            raw=raw,
+            speaker_key=speaker_key,
+            speaker_user_id=speaker_user_id,
+            today=today,
+        )
     if act.kind in (SpeechActKind.QUERY_ROLE, SpeechActKind.ASK_WHICH):
         return WorkFollowup()
     context_text, context_key = load_prior_context(
@@ -373,6 +566,19 @@ def interpret_work_or_followup(
         from_current = False
 
     if understood.confidence == "low" and understood.ask:
+        if is_completion_report(raw):
+            return complete_reported_work(
+                store,
+                chat_id=chat_id,
+                raw=raw,
+                speaker_key=speaker_key,
+                speaker_user_id=speaker_user_id,
+                today=today,
+            )
+        if speaker_key and (
+            may_create_task(raw) or act.kind == SpeechActKind.CREATE_TASK
+        ):
+            save_pending_create_draft(store, speaker_key, understood.title or raw)
         return WorkFollowup(reply=understood.ask, context_text=context_text)
 
     title = understood.title
@@ -1070,6 +1276,31 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
     user = update.effective_user
     if speaker_key is None:
         speaker_key = _maybe_map_speaker(store, user)
+    if act.kind == SpeechActKind.REPORT_DONE or is_completion_report(raw):
+        follow = interpret_work_or_followup(
+            store,
+            chat_id=group_id,
+            raw=raw,
+            speaker_key=speaker_key,
+            speaker_user_id=user.id if user else None,
+            reply_to_text=reply_to_text,
+            current_message_id=message.message_id,
+            addressed=addressed,
+        )
+        if follow.reply:
+            await message.reply_text(
+                follow.reply,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(follow.button_rows or []),
+            )
+            return
+        if must_reply(act, raw):
+            result = run_colleague(
+                store, group_id=group_id, text=raw, act=act, speaker_key=speaker_key
+            )
+            await message.reply_text(result.reply)
+        return
+
     if act.kind in (SpeechActKind.CREATE_TASK, SpeechActKind.CONFIRM, SpeechActKind.UNKNOWN):
         follow = interpret_work_or_followup(
             store,
@@ -1082,7 +1313,11 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             addressed=addressed,
         )
         if follow.reply:
-            await message.reply_text(follow.reply, parse_mode=ParseMode.HTML)
+            await message.reply_text(
+                follow.reply,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(follow.button_rows or []),
+            )
             return
     else:
         follow = WorkFollowup()

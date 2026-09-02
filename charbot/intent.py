@@ -16,6 +16,7 @@ class SpeechActKind(StrEnum):
     QUERY_ROLE = "query_role"
     CREATE_TASK = "create_task"
     REPORT = "report"
+    REPORT_DONE = "report_done"
     CONFIRM = "confirm"
     ASK_WHICH = "ask_which"
     LEARN = "learn"
@@ -81,9 +82,29 @@ _TASK_PREFIX_RE = re.compile(
     r"^(?:(?:task|new task|تسک(?:\s+جدید)?)\s*[:\-]|کار\s*[:\-]|we need to\s+)",
     re.IGNORECASE,
 )
+# Imperative only. Past «تحویل شد / انجام دادم» is a status report, not create.
 _OBJECT_IMPERATIVE_RE = re.compile(
-    r"(?:\sرا\s|\sرو\s).{0,80}(?:کن(?:ید|م|یم|ه)?|بفرست|بررسی|بساز|تحویل)"
+    r"(?:\sرا\s|\sرو\s).{0,80}(?:کن(?:ید|م|یم|ه)?(?:\s|$|[.،])|بفرست|بساز|"
+    r"بررسی\s*کن|تحویل\s*(?:کن|بده))"
 )
+
+# Perfective wrap-up of existing work (not period «گزارش این هفته»).
+_DONE_PAST_RE = re.compile(
+    r"(?:"
+    r"تموم\s*شد|تمام\s*شد|"
+    r"کار(?:م|ام)\s*(?:تموم|تمام|خلاص)|"
+    r"خلاص\s*شد|"
+    r"انجام\s*(?:داد(?:م|یم|ه)|شد|شده)|"
+    r"تکمیل\s*(?:شد|شده|کرد(?:م|یم))|"
+    r"تحویل\s*(?:شد|شده|داد(?:م|یم))|"
+    r"فرستاد(?:م|یم)|"
+    r"انجام.{0,24}(?:تکمیل.{0,16})?تحویل\s*شد"
+    r")"
+)
+_DONE_EN_RE = re.compile(r"\b(?:done|finished|delivered|completed)\b", re.IGNORECASE)
+_WORK_REPORT_RE = re.compile(r"گزارش\s*کار")
+_NOT_NEW_TASK_RE = re.compile(r"نه.{0,48}(?:تسک|فعالیت|کار).{0,24}جدید")
+
 
 
 def is_interrogative(text: str) -> bool:
@@ -144,6 +165,8 @@ def _asks_role(text: str) -> bool:
 
 def _is_new_work(text: str) -> bool:
     t = text or ""
+    if is_completion_report(t):
+        return False
     if has_inventory_ask(t) or _asks_role(t):
         return False
     if is_interrogative(t) and not is_explicit_create(t):
@@ -195,6 +218,27 @@ def _is_report(text: str) -> bool:
     return "گزارش" in t and any(w in t for w in ("هفته", "ماه", "از "))
 
 
+def is_completion_report(text: str) -> bool:
+    """Past-tense status: work finished/sent/delivered — never a new task.
+
+    Meaning families, not one frozen sentence: perfective wrap-up, first-person
+    delivery, «گزارش کار», or an explicit 'this is not a new task'. Period
+    reports («گزارش این هفته») stay REPORT.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _is_report(t):
+        return False
+    if _DONE_PAST_RE.search(t) or _DONE_EN_RE.search(t):
+        return True
+    if _WORK_REPORT_RE.search(t):
+        return True
+    if _NOT_NEW_TASK_RE.search(t):
+        return True
+    return False
+
+
 def _is_ask_which(text: str) -> bool:
     t = text or ""
     if has_inventory_ask(t) or _asks_role(t):
@@ -233,6 +277,9 @@ def classify_speech_act(text: str, *, speaker_key: str | None = None) -> SpeechA
 
     if _is_report(raw):
         return SpeechAct(SpeechActKind.REPORT)
+
+    if is_completion_report(raw):
+        return SpeechAct(SpeechActKind.REPORT_DONE)
 
     if is_learn_utterance(raw):
         return SpeechAct(SpeechActKind.LEARN)
@@ -278,6 +325,7 @@ def must_reply(act: SpeechAct, text: str) -> bool:
         SpeechActKind.LIST_TASKS,
         SpeechActKind.QUERY_ROLE,
         SpeechActKind.REPORT,
+        SpeechActKind.REPORT_DONE,
         SpeechActKind.ASK_WHICH,
         SpeechActKind.LEARN,
         SpeechActKind.CHECKIN,

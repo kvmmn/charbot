@@ -90,6 +90,7 @@ sequenceDiagram
 | Board open list | `LIST_TASKS` board_open | `کارهای باز` |
 | Job title | `QUERY_ROLE` | `نقش حامد چیه؟` (and **not** if `کارها` is present) |
 | Period report | `REPORT` | `گزارش این هفته` |
+| Completion of existing work | `REPORT_DONE` | `کارم تموم شد` `انجام دادم و فرستادم` |
 | New work imperative | `CREATE_TASK` | `قرارداد حامد را تا فردا بررسی کن` |
 | Ambiguous «چیکار می‌کنه» | `ASK_WHICH` | buttons: کارهاش / نقشش |
 
@@ -112,6 +113,7 @@ Perceive → **policy gate** (`classify_speech_act`) → **allowlisted tools** (
 
 - `اوکی؟` after teaching is a check-in (did you get it?), not a voice-transcript yes.
 - Tools cannot create tasks. `may_create_task` remains the only insert path.
+- `REPORT_DONE` / completion reports (تموم شد، انجام دادم، تحویل شد، فرستادم، گزارش کار) never create tasks. They match the speaker's open work and call `store.mark_done`. A pending create draft waiting for owner/due is cancelled.
 - LLM (OpenRouter, optional, 8s timeout) may pick a tool; output is JSON data, never executed as code. If the LLM is down, heuristics still reply. Silence is a class bug.
 - Writes the user explicitly taught (a name) are applied and open titles are rewritten. Task writes stay behind existing confirmations.
 

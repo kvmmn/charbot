@@ -147,6 +147,20 @@ def question_buttons(
     return [pairs[:2], pairs[2:]]
 
 
+def task_pick_buttons(items: list[tuple[str, int]]) -> list[list[tuple[str, str]]]:
+    """2–4 title chips; tap marks that open task done (td:done:id)."""
+    pairs = [
+        (_clip(label), f"td:done:{tid}")
+        for label, tid in items[:4]
+        if (label or "").strip()
+    ]
+    if not pairs:
+        return []
+    if len(pairs) <= 3:
+        return [pairs]
+    return [pairs[:2], pairs[2:]]
+
+
 def followup_question(title: str, owner_fa: str | None = None) -> str:
     """One short colleague-style ask about this piece of work."""
     work = (title or "کار").strip() or "کار"

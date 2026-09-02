@@ -7,10 +7,21 @@ from pathlib import Path
 
 import pytest
 
-from charbot.bot import interpret_work_or_followup
-from charbot.intent import SpeechActKind, classify_speech_act, may_create_task
+from charbot.bot import (
+    has_pending_create_draft,
+    interpret_work_or_followup,
+    save_pending_create_draft,
+)
+from charbot.intent import (
+    SpeechActKind,
+    classify_speech_act,
+    is_completion_report,
+    may_create_task,
+    must_reply,
+)
 from charbot.nlp import NLIntent, parse_natural_language
 from charbot.store import TaskStore
+from charbot.understand import extract_task
 
 TODAY = date(2026, 8, 31)
 GROUP = -1002781646107
@@ -170,3 +181,167 @@ def test_question_shaped_title_refused(tmp_path) -> None:
         raise AssertionError("store must refuse remnant titles")
     except ValueError as exc:
         assert "question-shaped" in str(exc)
+
+
+DONE_1 = "من بررسی قرارداد رو انجام دادم و فرستادم برای حامد و کارم تموم شد"
+DONE_2 = "موعدش رو خودت گفته بودی امروزه بوده. الان انجام و تکمیل و تحویل شد."
+DONE_3 = "دارم گزارش کار میدم. نه این که تسک یا فعالیت جدید معرفی کنم."
+
+
+def _kawe_store(tmp_path: Path) -> TaskStore:
+    store = TaskStore(tmp_path / "done.db")
+    store.upsert_user_mapping(
+        telegram_user_id=42,
+        member_key="kawe",
+        username="kvmmn",
+        display_name="Kawe",
+    )
+    return store
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        DONE_1,
+        DONE_2,
+        DONE_3,
+        "کارم تموم شد",
+        "انجام شد",
+        "تکمیل شد",
+        "تحویل شد",
+        "کارم خلاص شد",
+        "فرستادم",
+        "I finished it, done",
+        "the work is delivered",
+    ],
+)
+def test_completion_reports_are_not_create(text: str) -> None:
+    act = classify_speech_act(text, speaker_key="kawe")
+    assert act.kind == SpeechActKind.REPORT_DONE, text
+    assert not may_create_task(text), text
+    assert is_completion_report(text)
+    assert must_reply(act, text)
+    parsed = parse_natural_language(text, today=TODAY, speaker_key="kawe")
+    assert parsed.intent != NLIntent.CREATE_TASK, text
+    understood = extract_task(text, speaker_key="kawe", today=TODAY)
+    assert not understood.title
+    assert understood.ask is None
+
+
+def test_imperative_create_not_stolen_by_done() -> None:
+    text = "قرارداد حامد را تا فردا بررسی کن"
+    assert classify_speech_act(text).kind == SpeechActKind.CREATE_TASK
+    assert may_create_task(text)
+    assert not is_completion_report(text)
+
+
+def test_period_report_stays_report() -> None:
+    text = "گزارش این هفته"
+    assert classify_speech_act(text).kind == SpeechActKind.REPORT
+    assert not is_completion_report(text)
+
+
+def test_done_report_marks_matching_kawe_contract_task(tmp_path: Path) -> None:
+    store = _kawe_store(tmp_path)
+    task = store.create_task(
+        group_id=GROUP,
+        title="بررسی فایل تدوین‌شده قرارداد حامد",
+        assignee_key="kawe",
+        due_date=TODAY,
+    )
+    store.create_task(
+        group_id=GROUP,
+        title="لوگو اینستا",
+        assignee_key="saman",
+        due_date=TODAY,
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw=DONE_1,
+        speaker_key="kawe",
+        speaker_user_id=42,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is True
+    assert result.task is not None
+    assert result.task.id == task.id
+    fetched = store.get_task(task.id, GROUP)
+    assert fetched is not None
+    assert fetched.completed_at is not None
+    assert "تکمیل" in (result.reply or "")
+    open_ids = [t.id for t in store.list_open_tasks(GROUP)]
+    assert task.id not in open_ids
+
+
+def test_pending_create_draft_abandoned_on_done_report(tmp_path: Path) -> None:
+    store = _kawe_store(tmp_path)
+    store.create_task(
+        group_id=GROUP,
+        title="بررسی فایل تدوین‌شده قرارداد حامد",
+        assignee_key="kawe",
+        due_date=TODAY,
+    )
+    save_pending_create_draft(store, "kawe", "بررسی قرارداد")
+    assert has_pending_create_draft(store, "kawe")
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw=DONE_2,
+        speaker_key="kawe",
+        speaker_user_id=42,
+        today=TODAY,
+    )
+    assert not has_pending_create_draft(store, "kawe")
+    assert result.created is False
+    assert not may_create_task(DONE_2)
+    assert "موعد کی است" not in (result.reply or "")
+    assert "مسئول کیست" not in (result.reply or "")
+
+
+def test_done_report_several_matches_asks_with_buttons(tmp_path: Path) -> None:
+    store = _kawe_store(tmp_path)
+    store.create_task(
+        group_id=GROUP, title="بررسی قرارداد الف", assignee_key="kawe", due_date=TODAY
+    )
+    store.create_task(
+        group_id=GROUP, title="بررسی قرارداد ب", assignee_key="kawe", due_date=TODAY
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw="بررسی قرارداد تموم شد",
+        speaker_key="kawe",
+        speaker_user_id=42,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is False
+    rows = result.button_rows or []
+    n = sum(len(row) for row in rows)
+    assert 2 <= n <= 4
+    assert store.list_open_tasks(GROUP)
+    assert "تمام" in (result.reply or "")
+
+
+def test_done_report_no_match_never_creates(tmp_path: Path) -> None:
+    store = _kawe_store(tmp_path)
+    other = store.create_task(
+        group_id=GROUP, title="لوگو اینستا", assignee_key="kawe", due_date=TODAY
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw=DONE_3,
+        speaker_key="kawe",
+        speaker_user_id=42,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is False
+    assert store.get_task(other.id, GROUP).completed_at is None
+    rows = result.button_rows or []
+    labels = [label for row in rows for label, _data in row]
+    assert any("لوگو" in label for label in labels)
+    assert store.list_open_tasks(GROUP)

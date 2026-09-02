@@ -85,3 +85,11 @@ def test_clean_work_text_strips_fillers_and_zw() -> None:
     assert "متوجه شدی" not in cleaned
     assert "\u200b" not in cleaned
     assert "  " not in cleaned
+
+
+def test_sent_for_is_notify_not_assignee() -> None:
+    from charbot.understand import _explicit_assignee, _mask_non_owner_mentions
+
+    masked = _mask_non_owner_mentions("فرستادم برای حامد فایل قرارداد")
+    assert "حامد" not in masked
+    assert _explicit_assignee("فرستادم برای حامد") is None

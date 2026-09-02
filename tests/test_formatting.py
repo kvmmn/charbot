@@ -44,12 +44,14 @@ def test_due_date_compact():
 
 
 def test_screenshot_layout_and_person_rings():
-    saman = _task(assignee_key="saman", due_date=date(2026, 9, 1))
-    hamed = _task(assignee_key="hamed", due_date=date(2026, 9, 2), title="لوگو شی")
+    due_s = date.today() + timedelta(days=7)
+    due_h = date.today() + timedelta(days=8)
+    saman = _task(assignee_key="saman", due_date=due_s)
+    hamed = _task(assignee_key="hamed", due_date=due_h, title="لوگو شی")
     text_s = format_task(saman)
     text_h = format_task(hamed)
     assert text_s.startswith("<blockquote>")
-    assert "1/9 سامان" in text_s
+    assert f"{due_s.day}/{due_s.month} سامان" in text_s
     assert "🟠" in text_s
     assert "🟢" in text_h
     assert "🟠" not in text_h
