@@ -9,6 +9,7 @@ from charbot.formatting import (
     format_active_card,
     format_daily_plan,
     format_overdue_alert,
+    format_person_list_messages,
     format_resolved,
     format_task,
     format_task_confirmation,
@@ -183,8 +184,8 @@ def test_daily_plan_header_and_counts_no_keyboard_hint():
     ]
     text = format_daily_plan(tasks, today=TODAY)
     assert text.startswith("<b>برنامهٔ امروز</b>")
-    assert "۳ کار" in text
-    assert "۲ تصمیم" in text  # one overdue + one unassigned
+    assert "۳ کار برای ۲ نفر" in text
+    assert "بدون مسئول" in text
     assert "کار یک" in text and "کار دو" in text and "کار سه" in text
 
 
@@ -253,7 +254,7 @@ def test_digest_unassigned_goes_last_on_priority_tie():
     assert text.index("🟠 سامان") < text.index("⚪ بدون مسئول")
 
 
-def test_digest_expandable_past_threshold_keeps_urgent_items_visible():
+def test_person_list_later_people_are_their_own_messages_not_collapsed():
     urgent = [
         _task(id=i, title=f"فوری {i}", assignee_key="ghazal", due_date=date(2026, 8, 20 + i))
         for i in range(1, DIGEST_INLINE_MAX + 1)
@@ -261,16 +262,71 @@ def test_digest_expandable_past_threshold_keeps_urgent_items_visible():
     low_priority = _task(
         id=999, title="کار کم‌فوریت", assignee_key="saman", due_date=date(2026, 9, 20)
     )
-    text = format_task_digest(urgent + [low_priority], header="کارهای عقب‌افتاده", today=TODAY)
-    assert "<blockquote expandable>" in text
-    head, tail = text.split("<blockquote expandable>", 1)
-    assert "فوری 1" in head
-    assert "کار کم‌فوریت" in tail
+    msgs = format_person_list_messages(
+        urgent + [low_priority], header="کارهای عقب‌افتاده", today=TODAY
+    )
+    assert len(msgs) == 3  # intro + غزل + سامان
+    assert "فوری 1" in msgs[1]
+    assert "کار کم‌فوریت" in msgs[2]
+    assert "کار کم‌فوریت" not in msgs[1]
+    assert "<blockquote expandable>" not in msgs[2]
 
 
 def test_digest_empty_is_read_only():
     text = format_task_digest([], header="کارهای عقب‌افتاده")
     assert text.startswith("<b>کارهای عقب‌افتاده</b>")
+
+
+def test_person_list_messages_are_intro_plus_one_per_person():
+    tasks = _real_overdue_set()
+    msgs = format_person_list_messages(tasks, header="کارهای عقب‌افتاده", today=TODAY)
+    people = {t.assignee_key for t in tasks}
+    assert len(msgs) == 1 + len(people)
+    assert msgs[0].startswith("<b>کارهای عقب‌افتاده</b>")
+    assert "۵ کار برای ۴ نفر" in msgs[0]
+    for title in (
+        "اجرای سه لوگو",
+        "صورتجلسه هیئت مدیره",
+        "قیمت فیلم‌بردار اینستاگرام",
+        "جلسه سه‌شنبه",
+        "بلیط پرواز مشهد",
+    ):
+        assert title not in msgs[0]
+
+    ghazal = next(m for m in msgs[1:] if "غزل" in m)
+    assert "اجرای سه لوگو" in ghazal
+    assert "قیمت فیلم‌بردار اینستاگرام" in ghazal
+    assert "صورتجلسه هیئت مدیره" not in ghazal
+    assert "بلیط پرواز مشهد" not in ghazal
+    assert "جلسه سه‌شنبه" not in ghazal
+    assert ghazal.count("🟣 غزل") == 1
+
+    hamed = next(m for m in msgs[1:] if "حامد" in m)
+    assert "صورتجلسه هیئت مدیره" in hamed
+    assert "اجرای سه لوگو" not in hamed
+
+    assert "غزل" in msgs[1]  # most overdue person first
+
+
+def test_single_person_list_is_still_one_message():
+    task = _task(id=105, title="بلیط پرواز مشهد", assignee_key="saman", due_date=date(2026, 9, 1))
+    text = format_task_list([task], header="کارهای سامان", today=TODAY)
+    assert text.startswith("<b>کارهای سامان</b>")
+    assert "بلیط پرواز مشهد" in text
+    assert "🟣" not in text
+    # one message, not an intro-plus-person sequence
+    assert text.count("<b>") == 1
+
+
+def test_person_message_overflow_uses_expandable():
+    tasks = [
+        _task(id=i, title=f"کار شماره {i}", assignee_key="ghazal", due_date=date(2026, 8, 20))
+        for i in range(1, LIST_INLINE_MAX + 3)
+    ]
+    msgs = format_person_list_messages(tasks, header="کارهای باز", today=TODAY)
+    assert len(msgs) == 2
+    assert "<blockquote expandable>" in msgs[1]
+    assert msgs[1].index("کار شماره 1") < msgs[1].index("<blockquote expandable>")
 
 
 # ---------------------------------------------------------------------------

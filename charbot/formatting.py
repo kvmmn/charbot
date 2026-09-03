@@ -210,33 +210,29 @@ def format_task_list(tasks: list[Task], *, header: str, today: date | None = Non
     return f"<b>{escape(header)}</b>\n\n{_flat_body(tasks, today)}"
 
 
-def _needs_decision(task: Task, today: date) -> bool:
-    if task.assignee_key is None:
-        return True
-    return task.due_date is not None and task.due_date < today
+def owner_group_count(tasks: list[Task]) -> int:
+    """Distinct assignee keys in ``tasks`` (``None`` counts as one group)."""
+    return len({t.assignee_key for t in tasks})
 
 
 def format_daily_plan(
     tasks: list[Task], *, decisions: int | None = None, today: date | None = None
 ) -> str:
-    """<b>برنامهٔ امروز</b> — compact read-only orientation. No keyboard here;
-    the caller follows with at most one active card when exactly one
-    decision is pending (see bot.cmd_standup)."""
+    """Joined preview of the daily plan. Live send uses
+    ``format_person_list_messages`` so Telegram gets intro + one message
+    per person. ``decisions`` is accepted for call-site compatibility and
+    is not shown — the follow-up job still hands out the active cards."""
+    del decisions
     today = today or date.today()
     if not tasks:
         return "<b>برنامهٔ امروز</b>\n\nکاری در لیست نیست."
-    if decisions is None:
-        decisions = sum(1 for t in tasks if _needs_decision(t, today))
-    summary = f"{to_fa_digits(len(tasks))} کار"
-    if decisions:
-        summary += f"، {to_fa_digits(decisions)} تصمیم"
-    return f"<b>برنامهٔ امروز</b>\n\n{summary}\n{_flat_body(tasks, today)}"
+    return "\n\n".join(format_person_list_messages(tasks, header="برنامهٔ امروز", today=today))
 
 
 # ---------------------------------------------------------------------------
-# Grouped digest: person-by-person, most urgent group first. Urgent overdue
-# work is never buried in the expandable tail — only history/low-priority
-# groups get collapsed once the visible budget is spent.
+# Person-by-person lists: intro, then one message per owner. Most overdue
+# people first, unassigned last. Live senders emit each string separately
+# so the eye never has to scan a stacked wall of names.
 # ---------------------------------------------------------------------------
 
 
@@ -264,6 +260,67 @@ def _group_by_person(tasks: list[Task], today: date) -> list[tuple[str | None, l
     return groups
 
 
+def _people_summary(
+    groups: list[tuple[str | None, list[Task]]],
+    total: int,
+    unassigned_label: str,
+) -> str:
+    n_people = sum(1 for key, _ in groups if key)
+    has_unassigned = any(key is None for key, _ in groups)
+    summary = f"{to_fa_digits(total)} کار"
+    if n_people:
+        summary += f" برای {to_fa_digits(n_people)} نفر"
+    if has_unassigned:
+        summary += " و بدون مسئول" if n_people else f" {unassigned_label}"
+    return summary
+
+
+def _person_message(
+    key: str | None,
+    group_tasks: list[Task],
+    today: date,
+    unassigned_label: str,
+) -> str:
+    """One read-only message: ring+name once in the header, numbered items."""
+    name = unassigned_label if key is None else escape(member_display_fa(key))
+    ring = person_mark(key)
+    head = f"<b>{ring} {name} — {to_fa_digits(len(group_tasks))} کار</b>"
+    lines = [
+        f"{to_fa_digits(i + 1)}. {escape((t.title or '').strip() or 'بدون عنوان')}"
+        f" — {_due_short(t.due_date, today)}"
+        for i, t in enumerate(group_tasks)
+    ]
+    visible, overflow = lines[:LIST_INLINE_MAX], lines[LIST_INLINE_MAX:]
+    body = "\n".join(visible)
+    if overflow:
+        body += "\n" + wrap_expandable("\n".join(overflow))
+    return head + "\n" + body
+
+
+def format_person_list_messages(
+    tasks: list[Task],
+    *,
+    header: str,
+    today: date | None = None,
+    unassigned_label: str = UNASSIGNED_LABEL,
+) -> list[str]:
+    """Sequence of read-only HTML messages: intro, then one per person.
+
+    Message 0 is the type label + summary only. Each following message is
+    one owner (unassigned last). Callers must send them as separate Telegram
+    messages — do not stack them back into one bubble on the live path.
+    """
+    today = today or date.today()
+    if not tasks:
+        return [f"<b>{escape(header)}</b>\n\nچیزی در لیست نیست."]
+    groups = _group_by_person(tasks, today)
+    intro = f"<b>{escape(header)}</b>\n\n{_people_summary(groups, len(tasks), unassigned_label)}"
+    people = [
+        _person_message(key, group_tasks, today, unassigned_label) for key, group_tasks in groups
+    ]
+    return [intro, *people]
+
+
 def format_task_digest(
     tasks: list[Task],
     *,
@@ -271,46 +328,17 @@ def format_task_digest(
     today: date | None = None,
     unassigned_label: str = UNASSIGNED_LABEL,
 ) -> str:
-    """Read-only. Groups by owner; ring+name appears once, in the section
-    header, and is omitted from the numbered items under it."""
+    """Joined preview of the person-by-person digest. Live send uses
+    ``format_person_list_messages`` so each person is its own Telegram
+    message. Ring+name appears once per person, in that message's header."""
     today = today or date.today()
     if not tasks:
         return f"<b>{escape(header)}</b>\n\nچیزی نیست."
-
-    groups = _group_by_person(tasks, today)
-    total = len(tasks)
-    n_people = sum(1 for key, _ in groups if key)
-    has_unassigned = any(key is None for key, _ in groups)
-
-    summary = f"{to_fa_digits(total)} کار"
-    if n_people:
-        summary += f" برای {to_fa_digits(n_people)} نفر"
-    if has_unassigned:
-        summary += " و بدون مسئول" if n_people else f" {unassigned_label}"
-
-    sections: list[str] = []
-    overflow: list[str] = []
-    shown = 0
-    for key, group_tasks in groups:
-        name = unassigned_label if key is None else escape(member_display_fa(key))
-        ring = person_mark(key)
-        section_head = f"<b>{ring} {name} — {to_fa_digits(len(group_tasks))} کار</b>"
-        lines = [
-            f"{to_fa_digits(i + 1)}. {escape((t.title or '').strip() or 'بدون عنوان')}"
-            f" — {_due_short(t.due_date, today)}"
-            for i, t in enumerate(group_tasks)
-        ]
-        section = section_head + "\n" + "\n".join(lines)
-        if shown < DIGEST_INLINE_MAX:
-            sections.append(section)
-            shown += len(group_tasks)
-        else:
-            overflow.append(section)
-
-    body = "\n\n".join(sections)
-    if overflow:
-        body += "\n\n" + wrap_expandable("\n\n".join(overflow))
-    return f"<b>{escape(header)}</b>\n\n{summary}\n\n{body}"
+    return "\n\n".join(
+        format_person_list_messages(
+            tasks, header=header, today=today, unassigned_label=unassigned_label
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -34,11 +34,13 @@ from charbot.buttons import (
 from charbot.config import Settings
 from charbot.formatting import (
     HELP_TEXT,
+    format_person_list_messages,
     format_resolved,
     format_task,
     format_task_confirmation,
     format_task_list,
     format_task_question,
+    owner_group_count,
 )
 from charbot.intent import (
     CALLBACK_ID_PERSON,
@@ -117,6 +119,28 @@ def _markup(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup | None:
             if row
         ]
     )
+
+
+LIST_SEND_DELAY = 0.5  # seconds between person-list messages; avoids 429s
+
+
+async def _send_html_sequence(
+    message,
+    bot,
+    chat_id: int,
+    texts: list[str],
+    *,
+    delay: float | None = None,
+) -> None:
+    """Send a read-only HTML list as intro + one message per person."""
+    if not texts:
+        return
+    pause = LIST_SEND_DELAY if delay is None else delay
+    await message.reply_text(texts[0], parse_mode=ParseMode.HTML)
+    for body in texts[1:]:
+        if pause:
+            await asyncio.sleep(pause)
+        await bot.send_message(chat_id=chat_id, text=body, parse_mode=ParseMode.HTML)
 
 
 MENTION_HINTS = ("منشن", "منشن کن", "صداش کن", "صدا کن", "تگ کن", "mention", "صدا بزن")
@@ -516,22 +540,35 @@ def open_tasks_for(store: TaskStore, group_id: int, person_key: str | None) -> l
     return tasks
 
 
+def render_open_task_messages(
+    store: TaskStore,
+    group_id: int,
+    act: SpeechAct,
+    speaker_key: str | None,
+) -> list[str]:
+    """Board-wide lists are intro + one message per person. A named-person
+    answer («کارهای سامان») stays a single ``format_task_list`` message."""
+    if act.board_open:
+        return format_person_list_messages(store.list_open_tasks(group_id), header="کارهای باز")
+    person = act.person_key or (speaker_key if act.for_speaker else None)
+    if person is None:
+        return format_person_list_messages(store.list_open_tasks(group_id), header="کارهای باز")
+    if act.for_speaker or person == speaker_key:
+        header = "کارهای تو"
+    else:
+        header = f"کارهای {member_display_fa(person)}"
+    return [format_task_list(open_tasks_for(store, group_id, person), header=header)]
+
+
 def render_open_tasks(
     store: TaskStore,
     group_id: int,
     act: SpeechAct,
     speaker_key: str | None,
 ) -> str:
-    if act.board_open:
-        return format_task_list(store.list_open_tasks(group_id), header="کارهای باز")
-    person = act.person_key or (speaker_key if act.for_speaker else None)
-    if act.for_speaker or person == speaker_key:
-        header = "کارهای تو"
-    elif person:
-        header = f"کارهای {member_display_fa(person)}"
-    else:
-        header = "کارهای باز"
-    return format_task_list(open_tasks_for(store, group_id, person), header=header)
+    """Joined preview of ``render_open_task_messages``. Live senders that
+    answer a board-wide list must send the sequence, not this string."""
+    return "\n\n".join(render_open_task_messages(store, group_id, act, speaker_key))
 
 
 def render_role(store: TaskStore, person_key: str) -> str:
@@ -1028,8 +1065,8 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     store: TaskStore = context.bot_data["store"]
     tasks = store.list_open_tasks(group_id)
-    text = format_task_list(tasks, header="کارهای باز")
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    texts = format_person_list_messages(tasks, header="کارهای باز")
+    await _send_html_sequence(update.effective_message, context.bot, group_id, texts)
 
 
 async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1042,18 +1079,22 @@ async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     store: TaskStore = context.bot_data["store"]
     tasks = store.list_overdue_tasks(group_id)
-    text = format_task_list(tasks, header="عقب‌افتاده")
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    header = "کارهای عقب‌افتاده"
+    if owner_group_count(tasks) > 1:
+        texts = format_person_list_messages(tasks, header=header)
+    else:
+        texts = [format_task_list(tasks, header=header)]
+    await _send_html_sequence(update.effective_message, context.bot, group_id, texts)
 
 
 async def cmd_standup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Read-only daily plan («برنامهٔ امروز»). One list, no keyboard.
+    """Read-only daily plan («برنامهٔ امروز»): intro + one message per person.
 
-    If exactly one task needs a decision (overdue or unowned) it is followed
-    by ONE active card so the reply stays answerable without flooding the
-    group. With 0 or 2+ decisions pending, the plan stands alone — the
-    periodic follow-up job (see followup_job) handles a larger backlog one
-    card at a time.
+    No keyboard on the list. If exactly one task needs a decision (overdue
+    or unowned) it is followed by ONE active card so the reply stays
+    answerable without flooding the group. With 0 or 2+ decisions pending,
+    the plan stands alone — the periodic follow-up job (see followup_job)
+    handles a larger backlog one card at a time.
     """
     settings: Settings = context.bot_data["settings"]
     if await _reject_if_not_allowed(update, settings):
@@ -1081,7 +1122,7 @@ async def cmd_standup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=_markup(message.keyboard or []),
             )
 
-    await scheduled_standup.run(store, StandupSender(), group_id)
+    await scheduled_standup.run(store, StandupSender(), group_id, send_delay=LIST_SEND_DELAY)
 
 
 async def _reply_task_created(update: Update, task: Task) -> None:
@@ -1237,10 +1278,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
     act = classify_speech_act(raw, speaker_key=speaker_key)
     if act.kind == SpeechActKind.LIST_TASKS:
-        await message.reply_text(
-            render_open_tasks(store, group_id, act, speaker_key),
-            parse_mode=ParseMode.HTML,
-        )
+        texts = render_open_task_messages(store, group_id, act, speaker_key)
+        await _send_html_sequence(message, context.bot, group_id, texts)
         return
     if act.kind == SpeechActKind.QUERY_ROLE:
         if is_board_overview(raw):
@@ -1541,7 +1580,9 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
     if parsed.intent in (NLIntent.LIST_OPEN, NLIntent.LIST_TASKS, NLIntent.LIST_MINE):
         if parsed.intent == NLIntent.LIST_OPEN:
-            html = format_task_list(store.list_open_tasks(group_id), header="کارهای باز")
+            texts = format_person_list_messages(
+                store.list_open_tasks(group_id), header="کارهای باز"
+            )
         else:
             person = parsed.assignee_key or speaker_key
             act = SpeechAct(
@@ -1549,8 +1590,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
                 person_key=person,
                 for_speaker=person == speaker_key,
             )
-            html = render_open_tasks(store, group_id, act, speaker_key)
-        await message.reply_text(html, parse_mode=ParseMode.HTML)
+            texts = render_open_task_messages(store, group_id, act, speaker_key)
+        await _send_html_sequence(message, context.bot, group_id, texts)
         return
 
     if parsed.intent == NLIntent.QUERY_ROLE:
@@ -1563,9 +1604,12 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
     if parsed.intent == NLIntent.LIST_OVERDUE:
         tasks = store.list_overdue_tasks(group_id)
-        await message.reply_text(
-            format_task_list(tasks, header="عقب‌افتاده"), parse_mode=ParseMode.HTML
-        )
+        header = "کارهای عقب‌افتاده"
+        if owner_group_count(tasks) > 1:
+            texts = format_person_list_messages(tasks, header=header)
+        else:
+            texts = [format_task_list(tasks, header=header)]
+        await _send_html_sequence(message, context.bot, group_id, texts)
 
 
 async def setup_nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:

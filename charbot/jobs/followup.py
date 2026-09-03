@@ -9,7 +9,7 @@ from datetime import date
 from charbot.buttons import followup_question, question_buttons
 from charbot.formatting import (
     format_followup_queue_notice,
-    format_task_digest,
+    format_person_list_messages,
     format_task_question,
 )
 from charbot.members import member_display_fa
@@ -90,11 +90,12 @@ async def _run(
     if not watch:
         return []
     sent: list[JobMessage] = []
-    digest = JobMessage(chat_id, format_task_digest(watch, header="کارهای عقب‌افتاده", today=today))
-    await deliver(store, sender, digest)
-    sent.append(digest)
-    if send_delay:
-        await asyncio.sleep(send_delay)
+    for text in format_person_list_messages(watch, header="کارهای عقب‌افتاده", today=today):
+        digest = JobMessage(chat_id, text)
+        await deliver(store, sender, digest)
+        sent.append(digest)
+        if send_delay:
+            await asyncio.sleep(send_delay)
     candidates = watch[:max_candidates]
     if _burst_eligible(candidates, burst_limit):
         chosen = candidates

@@ -22,6 +22,12 @@ GROUP = -1002781646107
 TODAY = date(2026, 9, 3)
 
 
+@pytest.fixture(autouse=True)
+def _no_send_delay(monkeypatch):
+    monkeypatch.setattr(bot, "LIST_SEND_DELAY", 0)
+    monkeypatch.setattr(bot, "FOLLOWUP_SEND_DELAY", 0)
+
+
 # ---------------------------------------------------------------------------
 # Minimal python-telegram-bot fakes
 # ---------------------------------------------------------------------------
@@ -144,9 +150,7 @@ def _all_callback_data(markup) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_followup_sends_digest_then_one_active_card_and_queues_rest(
-    tmp_path, monkeypatch
-):
+async def test_followup_sends_digest_then_one_active_card_and_queues_rest(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "FOLLOWUP_SEND_DELAY", 0)
     store = _store(tmp_path)
     tasks = _real_overdue_tasks(store)
@@ -154,12 +158,21 @@ async def test_followup_sends_digest_then_one_active_card_and_queues_rest(
 
     await bot._run_followup_for_group(fake_bot, store, GROUP)
 
-    assert fake_bot.send_message.call_count == 2
-    digest_call, card_call = fake_bot.send_message.call_args_list
-    digest_text = digest_call.kwargs["text"]
-    assert digest_text.startswith("<b>کارهای عقب‌افتاده</b>")
-    assert "reply_markup" not in digest_call.kwargs or digest_call.kwargs["reply_markup"] is None
-    assert "غزل" in digest_text and "حامد" in digest_text and "سامان" in digest_text
+    # intro + 4 people + 1 active card
+    assert fake_bot.send_message.call_count == 6
+    intro_call, *person_calls, card_call = fake_bot.send_message.call_args_list
+    intro_text = intro_call.kwargs["text"]
+    assert intro_text.startswith("<b>کارهای عقب‌افتاده</b>")
+    assert "۵ کار برای ۴ نفر" in intro_text
+    assert "reply_markup" not in intro_call.kwargs or intro_call.kwargs["reply_markup"] is None
+    person_texts = [c.kwargs["text"] for c in person_calls]
+    joined_people = "\n".join(person_texts)
+    assert "غزل" in joined_people and "حامد" in joined_people and "سامان" in joined_people
+    ghazal = next(t for t in person_texts if "غزل" in t)
+    assert "اجرای سه لوگو" in ghazal
+    assert "صورتجلسه هیئت مدیره" not in ghazal
+    for call in [intro_call, *person_calls]:
+        assert "reply_markup" not in call.kwargs or call.kwargs["reply_markup"] is None
 
     card_text = card_call.kwargs["text"]
     assert card_text.startswith("<b>پاسخ لازم</b>")
@@ -208,9 +221,9 @@ async def test_followup_bursts_when_few_distinct_people(tmp_path, monkeypatch):
 
     await bot._run_followup_for_group(fake_bot, store, GROUP)
 
-    # digest + 2 active cards (different named people) sent in the same run
-    assert fake_bot.send_message.call_count == 3
-    for call in fake_bot.send_message.call_args_list[1:]:
+    # intro + 2 people + 2 active cards (different named people)
+    assert fake_bot.send_message.call_count == 5
+    for call in fake_bot.send_message.call_args_list[-2:]:
         assert call.kwargs["text"].startswith("<b>پاسخ لازم</b>")
     assert store.get_kv(bot._followup_queue_key(GROUP)) in (None, "", "[]")
 
@@ -246,9 +259,7 @@ async def test_callback_resolves_message_and_advances_queue(tmp_path, monkeypatc
     rows = bot.question_buttons(ask, kind="fu", context=ghazal_task.title, target_id=ghazal_task.id)
     tapped_data = rows[0][0][1]
     tapped_label = rows[0][0][0]
-    markup = FakeMarkup(
-        [[FakeButton(label, data) for label, data in row] for row in rows]
-    )
+    markup = FakeMarkup([[FakeButton(label, data) for label, data in row] for row in rows])
     query_message = FakeQueryMessage(chat_id=GROUP, reply_markup=markup)
     query = FakeQuery(tapped_data, query_message)
     fake_bot = MagicMock(send_message=AsyncMock())
@@ -322,6 +333,13 @@ async def test_cmd_open_list_has_no_buttons(tmp_path):
     assert kwargs.get("reply_markup") is None
     text = message.reply_text.call_args.args[0]
     assert text.startswith("<b>کارهای باز</b>")
+    assert "۵ کار برای ۴ نفر" in text
+    assert context.bot.send_message.await_count == 4
+    for call in context.bot.send_message.call_args_list:
+        assert call.kwargs.get("reply_markup") is None
+        body = call.kwargs["text"]
+        assert body.startswith("<b>")
+        assert not body.startswith("<b>پاسخ لازم</b>")
 
 
 @pytest.mark.asyncio
@@ -339,7 +357,10 @@ async def test_cmd_standup_plan_is_read_only(tmp_path):
     assert kwargs.get("reply_markup") is None
     text = message.reply_text.call_args.args[0]
     assert text.startswith("<b>برنامهٔ امروز</b>")
-    context.bot.send_message.assert_not_awaited()
+    assert context.bot.send_message.await_count == 4
+    for call in context.bot.send_message.call_args_list:
+        assert call.kwargs.get("reply_markup") is None
+        assert not call.kwargs["text"].startswith("<b>پاسخ لازم</b>")
 
 
 @pytest.mark.asyncio
@@ -355,8 +376,11 @@ async def test_cmd_standup_sends_one_active_card_for_single_decision(tmp_path):
     await bot.cmd_standup(update, context)
 
     message.reply_text.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
-    card_text = context.bot.send_message.call_args.kwargs["text"]
+    assert context.bot.send_message.await_count == 2
+    person_call, card_call = context.bot.send_message.call_args_list
+    assert "سامان" in person_call.kwargs["text"]
+    assert person_call.kwargs.get("reply_markup") is None
+    card_text = card_call.kwargs["text"]
     assert card_text.startswith("<b>پاسخ لازم</b>")
 
 

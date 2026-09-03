@@ -45,15 +45,18 @@ Telegram, not us, sets these limits. Design inside them, don't fight them:
   phone reads as clutter.
 - **Rate limits are real.** Telegram throttles rapid `sendMessage` calls to
   the same chat; a burst without pacing gets you a `429`. Multi-message
-  sends (the follow-up job) sleep `FOLLOWUP_SEND_DELAY` seconds between
-  sends, and only ever burst 1–3 messages before pacing kicks in.
+  sends (full lists and the follow-up job) sleep `LIST_SEND_DELAY` /
+  `FOLLOWUP_SEND_DELAY` seconds between sends, and only ever burst 1–3
+  *active cards* before pacing kicks in.
 
 ## 2. The interaction model: digest → one active card → resolved edit
 
 A shared group must never see a wall of simultaneous questions.
 
-1. **Digest.** One read-only message orients everyone: what's outstanding,
-   grouped by owner. No keyboard.
+1. **Digest.** A read-only intro (type label + summary) plus **one message
+   per person** orients everyone: what's outstanding, grouped by owner.
+   No keyboard on any of these. Never stack every person under one long
+   bubble — the eye loses the list when it grows.
 2. **Active card.** Only the *next* item that genuinely needs an answer is
    sent as its own message with its own keyboard — never several tasks'
    keyboards merged into one message.
@@ -109,8 +112,8 @@ Persian digits everywhere; no other icon system.
 
 | First line | Shape | Used by |
 |---|---|---|
-| `<b>برنامهٔ امروز</b>` | Compact read-only numbered list, no keyboard | `bot.cmd_standup` |
-| `<b>کارهای عقب‌افتاده</b>` (or any list header) | Read-only list/digest, grouped or flat, no keyboard | `format_task_list`, `format_task_digest` |
+| `<b>برنامهٔ امروز</b>` | Intro + one read-only message per person, no keyboard | `format_person_list_messages`, `bot.cmd_standup` |
+| `<b>کارهای عقب‌افتاده</b>` / `<b>کارهای باز</b>` | Multi-person: intro + one message per person. Single-person («کارهای سامان»): one flat list. No keyboard | `format_person_list_messages`, `format_task_list` |
 | `<b>پاسخ لازم</b>` | One direct question + one keyboard (the active card) | `format_active_card`, `format_task_question` |
 | `<b>عقب‌افتاده</b>` | Single-item alert: owner + consequence + suggested next action | `format_overdue_alert` |
 | `<b>ثبت شد</b>` | Short edited confirmation, keyboard removed | `format_resolved`, `format_task_confirmation` |
@@ -157,13 +160,15 @@ substitute for the name. Rules:
 `<blockquote expandable>` exists for one purpose: keep a message short
 without deleting information. Rules:
 
-- Used past ~6 cards/lines in a section (`LIST_INLINE_MAX`,
-  `DIGEST_INLINE_MAX`) — not before. A 3-task list is never collapsed.
-- Reserved for the actual overflow *payload* (remaining people in a digest,
+- Used past ~6 cards/lines in a *single* message (`LIST_INLINE_MAX`) — not
+  before. A 3-task list is never collapsed. Multi-person lists do not
+  collapse later people: each person is already their own message.
+- Reserved for the actual overflow *payload* (extra tasks under one person,
   per-person detail in a weekly report) — never for a type label or a
   metadata line. If everything is quoted, nothing stands out.
-- Never used to hide the most urgent item. Digest groups are ordered by
-  urgency; only the lower-priority tail can end up collapsed.
+- Never used to hide the most urgent item. Person messages are ordered by
+  urgency (most overdue person first); later people are separate messages,
+  not an expandable tail.
 
 ## 8. Rendered examples
 
@@ -172,44 +177,47 @@ the incident this design replaced (غزل logo execution 29 Aug; حامد board
 list 30 Aug; غزل Instagram videographer 1 Sep; محمدرضا Tuesday meeting
 1 Sep; سامان Mashhad flight 1 Sep — "today" = 3 Sep 2026).
 
-### Daily plan (`format_daily_plan`, `bot.cmd_standup`)
+### Daily plan / multi-person list (`format_person_list_messages`, `bot.cmd_standup`)
+
+Live send is **five Telegram messages** (intro + one per person). Joined
+here only so the example is readable in one place:
 
 ```
 <b>برنامهٔ امروز</b>
 
-۵ کار، ۵ تصمیم
-۱. اجرای سه لوگو — موعد ۷ شهریور — 🟣 غزل
-۲. صورتجلسه هیئت مدیره — موعد ۸ شهریور — 🟢 حامد
-۳. قیمت فیلم‌بردار اینستاگرام — موعد ۱۰ شهریور — 🟣 غزل
-۴. جلسه سه‌شنبه — موعد ۱۰ شهریور — 🟡 محمدرضا
-۵. بلیط پرواز مشهد — موعد ۱۰ شهریور — 🟠 سامان
+۵ کار برای ۴ نفر
+```
+
+```
+<b>🟣 غزل — ۲ کار</b>
+۱. اجرای سه لوگو — موعد ۷ شهریور
+۲. قیمت فیلم‌بردار اینستاگرام — موعد ۱۰ شهریور
+```
+
+```
+<b>🟢 حامد — ۱ کار</b>
+۱. صورتجلسه هیئت مدیره — موعد ۸ شهریور
+```
+
+```
+<b>🟡 محمدرضا — ۱ کار</b>
+۱. جلسه سه‌شنبه — موعد ۱۰ شهریور
+```
+
+```
+<b>🟠 سامان — ۱ کار</b>
+۱. بلیط پرواز مشهد — موعد ۱۰ شهریور
 ```
 No keyboard. If exactly one item needed a decision, cmd_standup follows
 this with one active card (see below). With five, the periodic follow-up
 job hands them out one at a time instead (section 2).
 
-### Digest (`format_task_digest`, `followup_job`)
+### Digest (`format_person_list_messages`, `followup_job`)
 
-```
-<b>کارهای عقب‌افتاده</b>
-
-۵ کار برای ۴ نفر
-
-<b>🟣 غزل — ۲ کار</b>
-۱. اجرای سه لوگو — موعد ۷ شهریور
-۲. قیمت فیلم‌بردار اینستاگرام — موعد ۱۰ شهریور
-
-<b>🟢 حامد — ۱ کار</b>
-۱. صورتجلسه هیئت مدیره — موعد ۸ شهریور
-
-<b>🟡 محمدرضا — ۱ کار</b>
-۱. جلسه سه‌شنبه — موعد ۱۰ شهریور
-
-<b>🟠 سامان — ۱ کار</b>
-۱. بلیط پرواز مشهد — موعد ۱۰ شهریور
-```
-Ghazal's section leads because she owns the oldest overdue item. No
-keyboard anywhere in this message.
+Same shape as the daily plan — intro, then one message per person — with
+the type label `<b>کارهای عقب‌افتاده</b>`. Ghazal's message leads because
+she owns the oldest overdue item. No keyboard on any of these messages.
+`format_task_digest` exists only as a joined preview for tests.
 
 ### Task list answer (`format_task_list`, e.g. «کارهای سامان چی؟»)
 

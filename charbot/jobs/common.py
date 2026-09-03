@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from charbot.store import TaskStore
+
+LIST_SEND_DELAY = 0.5
 
 
 @dataclass(frozen=True)
@@ -36,3 +39,19 @@ async def deliver(store: TaskStore, sender: Sender, message: JobMessage) -> Any:
             telegram_message_id=message_id,
         )
     return result
+
+
+async def deliver_many(
+    store: TaskStore,
+    sender: Sender,
+    messages: list[JobMessage],
+    *,
+    delay: float = LIST_SEND_DELAY,
+) -> list[Any]:
+    """Send read-only messages in order, paced to avoid Telegram 429s."""
+    results = []
+    for i, message in enumerate(messages):
+        results.append(await deliver(store, sender, message))
+        if delay and i < len(messages) - 1:
+            await asyncio.sleep(delay)
+    return results
