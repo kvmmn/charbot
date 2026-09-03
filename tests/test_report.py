@@ -122,10 +122,14 @@ def test_per_person_counts(tmp_path: Path) -> None:
     html = format_period_report(list(rows.values()), start, end, label="این هفته")
     assert "بازه" in html
     assert "سامان" in html
-    assert "<blockquote>" in html
+    assert "<blockquote expandable>" in html
     assert "غزل" in html
     assert "کم‌کاری احتمالی" in html
     assert "گرفتم ثبت شد" not in html
+    assert html.startswith("<b>گزارش این هفته</b>")
+    # totals line uses Persian digits and comes before the per-person detail
+    assert "۲ انجام‌شده" in html
+    assert html.index("انجام‌شده،") < html.index("<blockquote expandable>")
 
 
 def test_mark_done_sets_completed_at_and_events(tmp_path: Path) -> None:

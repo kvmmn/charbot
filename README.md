@@ -21,7 +21,7 @@ Board members talk in Telegram the way they already talk. charbot listens, turns
 2. Telegram delivers that update to Fly over HTTPS (`POST /telegram/webhook`).
 3. charbot interprets **meaning**, not only keywords: it strips filler, fills title / owner / due / description, and **asks** when something is missing instead of guessing.
 4. People, roles, tasks, and messages are stored in Neon.
-5. The bot replies in the group. Task lists show only **title, owner, due**. Extra detail stays on the record.
+5. The bot replies in the group: read-only lists explain, one-task cards ask, and a tap edits that card into a closed record. Task cards show title, owner, and a Persian due date. Extra detail stays on the record. Full rules: [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md).
 
 ```mermaid
 flowchart LR
@@ -31,7 +31,7 @@ flowchart LR
   D --> E[Reply in the group<br/>task cards]
 ```
 
-A longer, manager-facing write-up is in [docs/FOR-MANAGERS.md](docs/FOR-MANAGERS.md). Engineers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+A longer, manager-facing write-up is in [docs/FOR-MANAGERS.md](docs/FOR-MANAGERS.md). Engineers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (system) and [docs/UI-GUIDELINES.md](docs/UI-GUIDELINES.md) (Telegram presentation rules — cards, lists, keyboards).
 
 ## What it does
 

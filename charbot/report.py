@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from charbot.formatting import to_fa_digits, wrap_expandable
 from charbot.members import BOARD_MEMBERS, member_display_fa
 from charbot.nlp import parse_date
 from charbot.store import TaskStatus, TaskStore
@@ -148,7 +149,7 @@ def period_report(
 
 
 def format_day_fa(d: date) -> str:
-    return f"{d.day} {_MONTHS_FA[d.month - 1]} {d.year}"
+    return f"{to_fa_digits(d.day)} {_MONTHS_FA[d.month - 1]} {to_fa_digits(d.year)}"
 
 
 def format_range_fa(start: date, end: date) -> str:
@@ -166,26 +167,43 @@ def format_period_report(
     *,
     label: str | None = None,
 ) -> str:
+    """<b>گزارش {label}</b> — totals first, per-person detail in ONE
+    expandable blockquote (never one blockquote per person: that was the
+    "everything is a card" flood this replaces)."""
     title = label or "بازه"
-    header = f"<b>گزارش چهارستون — {title}</b>\nبازه {format_range_fa(start, end)}"
-    blocks = [header]
+    done = sum(row.done_in_period for row in people)
+    still_open = sum(row.still_open for row in people)
+    overdue = sum(row.overdue for row in people)
+    totals = (
+        f"{to_fa_digits(done)} انجام‌شده، {to_fa_digits(still_open)} مانده، "
+        f"{to_fa_digits(overdue)} عقب‌افتاده"
+    )
+
     under: list[str] = []
+    detail_lines = []
     for row in people:
-        body = (
-            f"<b>{row.display}</b>\n"
-            f"انجام‌شده: {row.done_in_period}  ·  به‌موقع: {row.on_time_done}"
-            f"  ·  دیر: {row.late_done}\n"
-            f"باز: {row.still_open}  ·  عقب‌افتاده: {row.overdue}"
+        detail_lines.append(
+            f"{row.display} — انجام‌شده {to_fa_digits(row.done_in_period)}، "
+            f"به‌موقع {to_fa_digits(row.on_time_done)}، دیر {to_fa_digits(row.late_done)}، "
+            f"باز {to_fa_digits(row.still_open)}، عقب‌افتاده {to_fa_digits(row.overdue)}"
         )
-        blocks.append(f"<blockquote>{body}</blockquote>")
         if row.done_in_period == 0 and (row.still_open or row.overdue):
             under.append(row.display)
+
+    parts = [
+        f"<b>گزارش {title}</b>",
+        "",
+        f"بازه {format_range_fa(start, end)}",
+        totals,
+        "",
+        wrap_expandable("\n".join(detail_lines)),
+    ]
     if under:
         who = "، ".join(under)
-        blocks.append(
+        parts.append(
             f"{who} این بازه انجام‌شده‌ای ندارد و کار باز یا عقب‌افتاده دارد — کم‌کاری احتمالی."
         )
-    return "\n".join(blocks)
+    return "\n".join(parts)
 
 
 def render_period_report(

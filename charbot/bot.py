@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -31,7 +32,14 @@ from charbot.buttons import (
     task_pick_buttons,
 )
 from charbot.config import Settings
-from charbot.formatting import HELP_TEXT, format_task, format_task_list
+from charbot.formatting import (
+    HELP_TEXT,
+    format_resolved,
+    format_task,
+    format_task_confirmation,
+    format_task_list,
+    format_task_question,
+)
 from charbot.intent import (
     CALLBACK_ID_PERSON,
     PERSON_CALLBACK_ID,
@@ -42,6 +50,9 @@ from charbot.intent import (
     may_create_task,
     must_reply,
 )
+from charbot.jobs import followup as scheduled_followup
+from charbot.jobs import standup as scheduled_standup
+from charbot.jobs.common import JobMessage
 from charbot.members import (
     MEMBER_BY_KEY,
     find_member_in_text,
@@ -64,7 +75,7 @@ from charbot.report import (
     render_period_report,
     week_bounds,
 )
-from charbot.store import Task, TaskStore
+from charbot.store import Task, TaskStatus, TaskStore
 from charbot.understand import clean_work_text, extract_task
 from charbot.voice import (
     ASR_FAIL_FA,
@@ -96,7 +107,6 @@ def _safe_create_task(store: TaskStore, **kwargs):
         return None
 
 
-
 def _markup(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup | None:
     if not rows:
         return None
@@ -108,15 +118,42 @@ def _markup(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup | None:
         ]
     )
 
+
 MENTION_HINTS = ("منشن", "منشن کن", "صداش کن", "صدا کن", "تگ کن", "mention", "صدا بزن")
 WORK_HINTS = (
-    "جلسه", "نتیجه جلسه", "تحویل", "دوشنبه", "سشنبه", "سه‌شنبه", "لوگو",
-    "لینک", "فوروارد", "پیگیری", "غزل", "نمونه", "اینستا", "پالت", "وظایف",
-    "کارها", "تا روز", "تا پایان", "پروژه", "کارگاه", "مشتری",
+    "جلسه",
+    "نتیجه جلسه",
+    "تحویل",
+    "دوشنبه",
+    "سشنبه",
+    "سه‌شنبه",
+    "لوگو",
+    "لینک",
+    "فوروارد",
+    "پیگیری",
+    "غزل",
+    "نمونه",
+    "اینستا",
+    "پالت",
+    "وظایف",
+    "کارها",
+    "تا روز",
+    "تا پایان",
+    "پروژه",
+    "کارگاه",
+    "مشتری",
 )
 ROLE_TITLE_HINTS = (
-    "نقش من", "نقشم", "مدیرعامل", "نایب رئیس", "رئیس هیئت", "حسابدار",
-    "سرپرست طراحی", "طراح", "کارشناس", "مهندس",
+    "نقش من",
+    "نقشم",
+    "مدیرعامل",
+    "نایب رئیس",
+    "رئیس هیئت",
+    "حسابدار",
+    "سرپرست طراحی",
+    "طراح",
+    "کارشناس",
+    "مهندس",
 )
 QUESTION_HINTS = ("؟", "?", "چیه", "چیست", "چی بود", "نمیدونی", "کی هست", "کیه")
 IMPERATIVE_HINTS = ("توضیح بده", "شرح بده", "کامل بگو", "بگو")
@@ -151,8 +188,6 @@ def _looks_like_work(text: str) -> bool:
 
 def _is_question(text: str) -> bool:
     return any(h in text for h in QUESTION_HINTS) or any(h in text for h in IMPERATIVE_HINTS)
-
-
 
 
 def is_board_overview(text: str) -> bool:
@@ -356,9 +391,7 @@ _MATCH_STOP = frozenset(
 def save_pending_create_draft(store: TaskStore, speaker_key: str | None, payload: str) -> None:
     if not speaker_key:
         return
-    store.set_person_fact(
-        speaker_key, "notes", CREATE_DRAFT_KEY, payload or "1", source="create"
-    )
+    store.set_person_fact(speaker_key, "notes", CREATE_DRAFT_KEY, payload or "1", source="create")
 
 
 def clear_pending_create_draft(store: TaskStore, speaker_key: str | None) -> None:
@@ -506,10 +539,7 @@ def render_role(store: TaskStore, person_key: str) -> str:
     name = member_display_fa(person_key)
     if role:
         return f"{name}: {role}"
-    return (
-        f"نقش {name} را هنوز ندارم. "
-        f"{_mention_for(store, person_key)} یک جمله بگو، ثبت می‌کنم."
-    )
+    return f"نقش {name} را هنوز ندارم. {_mention_for(store, person_key)} یک جمله بگو، ثبت می‌کنم."
 
 
 def interpret_work_or_followup(
@@ -575,9 +605,7 @@ def interpret_work_or_followup(
                 speaker_user_id=speaker_user_id,
                 today=today,
             )
-        if speaker_key and (
-            may_create_task(raw) or act.kind == SpeechActKind.CREATE_TASK
-        ):
+        if speaker_key and (may_create_task(raw) or act.kind == SpeechActKind.CREATE_TASK):
             save_pending_create_draft(store, speaker_key, understood.title or raw)
         return WorkFollowup(reply=understood.ask, context_text=context_text)
 
@@ -610,11 +638,12 @@ def interpret_work_or_followup(
     if existing:
         return WorkFollowup(
             task=existing,
-            reply="نوشته شد.\n" + format_task(existing),
+            reply=format_task_confirmation(existing),
             created=False,
             context_text=context_text,
         )
-    task = _safe_create_task(store, 
+    task = _safe_create_task(
+        store,
         group_id=chat_id,
         title=title,
         description=description,
@@ -626,7 +655,7 @@ def interpret_work_or_followup(
         return WorkFollowup(context_text=context_text)
     return WorkFollowup(
         task=task,
-        reply="نوشته شد.\n" + format_task(task),
+        reply=format_task_confirmation(task),
         created=True,
         context_text=context_text,
     )
@@ -651,8 +680,12 @@ def _maybe_map_speaker(store: TaskStore, user) -> str | None:
     if not user or user.is_bot:
         return None
     mapping = store.get_user_mapping(user.id)
-    key = mapping.member_key if mapping else (
-        resolve_member_name(user.first_name or "") or resolve_member_name(user.full_name or "")
+    key = (
+        mapping.member_key
+        if mapping
+        else (
+            resolve_member_name(user.first_name or "") or resolve_member_name(user.full_name or "")
+        )
     )
     if not key:
         return None
@@ -777,9 +810,7 @@ async def _reject_if_not_allowed(update: Update, settings: Settings) -> bool:
     if _chat_allowed(update, settings):
         return False
     if update.effective_message:
-        await update.effective_message.reply_text(
-            "چاربات فقط در گروه شرکت فعال است."
-        )
+        await update.effective_message.reply_text("چاربات فقط در گروه شرکت فعال است.")
     return True
 
 
@@ -905,7 +936,8 @@ async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if mapping:
             assignee_key = mapping.member_key
 
-    task = _safe_create_task(store, 
+    task = _safe_create_task(
+        store,
         group_id=group_id,
         title=title,
         assignee_key=assignee_key,
@@ -952,9 +984,7 @@ async def cmd_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store: TaskStore = context.bot_data["store"]
     task_id, due = parse_due_command(context.args or [])
     if task_id is None or not due:
-        await update.effective_message.reply_text(
-            "Usage: /due 3 tomorrow — or /due 3 2026-03-15"
-        )
+        await update.effective_message.reply_text("Usage: /due 3 tomorrow — or /due 3 2026-03-15")
         return
 
     task = store.set_due_date(task_id, group_id, due)
@@ -1017,6 +1047,14 @@ async def cmd_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_standup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Read-only daily plan («برنامهٔ امروز»). One list, no keyboard.
+
+    If exactly one task needs a decision (overdue or unowned) it is followed
+    by ONE active card so the reply stays answerable without flooding the
+    group. With 0 or 2+ decisions pending, the plan stands alone — the
+    periodic follow-up job (see followup_job) handles a larger backlog one
+    card at a time.
+    """
     settings: Settings = context.bot_data["settings"]
     if await _reject_if_not_allowed(update, settings):
         return
@@ -1025,26 +1063,30 @@ async def cmd_standup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     store: TaskStore = context.bot_data["store"]
-    open_tasks = store.list_open_tasks(group_id)
-    overdue = store.list_overdue_tasks(group_id)
-    unowned = store.list_unowned_open_tasks(group_id)
 
-    parts = [format_task_list(open_tasks, header="کارهای باز")]
-    if overdue:
-        parts.append(format_task_list(overdue, header="عقب‌افتاده"))
-    if unowned:
-        parts.append(format_task_list(unowned, header="بدون مسئول"))
-    watch = list(overdue) + [t for t in open_tasks if t not in overdue]
-    await update.effective_message.reply_text(
-        "\n\n".join(parts),
-        parse_mode=ParseMode.HTML,
-        reply_markup=_task_followup_markup(watch[:6]),
-    )
+    class StandupSender:
+        def __init__(self):
+            self.first = True
+
+        async def send(self, message: JobMessage):
+            if self.first:
+                self.first = False
+                return await update.effective_message.reply_text(
+                    message.text, parse_mode=ParseMode.HTML
+                )
+            return await context.bot.send_message(
+                chat_id=message.chat_id,
+                text=message.text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(message.keyboard or []),
+            )
+
+    await scheduled_standup.run(store, StandupSender(), group_id)
 
 
 async def _reply_task_created(update: Update, task: Task) -> None:
     await update.effective_message.reply_text(
-        "نوشته شد.\n" + format_task(task),
+        format_task_confirmation(task),
         parse_mode=ParseMode.HTML,
     )
 
@@ -1069,7 +1111,8 @@ def confirmed_task_html(
         existing = _similar_open_task(store, chat_id, title, understood.assignee_key)
         if existing:
             return format_task(existing)
-        task = _safe_create_task(store, 
+        task = _safe_create_task(
+            store,
             group_id=chat_id,
             title=title,
             description=understood.description,
@@ -1150,9 +1193,7 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
                 speaker_user_id=user.id if user else None,
                 transcript=pending.transcript or "",
             )
-            html = confirmed_prompt(
-                speaker_key, pending.transcript or "", store=store
-            )
+            html = confirmed_prompt(speaker_key, pending.transcript or "", store=store)
             if extra:
                 html = html + "\n" + extra
             if pending.confirm_message_id:
@@ -1189,15 +1230,9 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
     period = parse_report_request(raw)
     if period is not None:
-        html = render_period_report(
-            store, group_id, period.start, period.end, label=period.label
-        )
-        rows = question_buttons(
-            "گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0
-        )
-        await message.reply_text(
-            html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows)
-        )
+        html = render_period_report(store, group_id, period.start, period.end, label=period.label)
+        rows = question_buttons("گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0)
+        await message.reply_text(html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows))
         return
 
     act = classify_speech_act(raw, speaker_key=speaker_key)
@@ -1224,19 +1259,21 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             return
         tasks = open_tasks_for(store, group_id, target)
         pid = PERSON_CALLBACK_ID.get(target, 0)
-        rows = question_buttons(
-            "کارهاش یا نقشش؟", kind="qa", context="کارهاش نقشش", target_id=pid
-        )
+        rows = question_buttons("کارهاش یا نقشش؟", kind="qa", context="کارهاش نقشش", target_id=pid)
         if tasks:
+            # The list is read-only (rule: lists explain). The follow-up
+            # question about role lives in its own message with its own
+            # keyboard, right above its own buttons.
             html = render_open_tasks(
                 store,
                 group_id,
                 SpeechAct(SpeechActKind.LIST_TASKS, person_key=target),
                 speaker_key,
             )
-            html += "\nاگر نقش می‌خوای، همان دکمه."
+            await message.reply_text(html, parse_mode=ParseMode.HTML)
             await message.reply_text(
-                html, parse_mode=ParseMode.HTML, reply_markup=_markup(rows)
+                f"نقش {member_display_fa(target)} را هم بخوای بگو.",
+                reply_markup=_markup(rows),
             )
         else:
             await message.reply_text(
@@ -1246,9 +1283,7 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if act.kind in (SpeechActKind.LEARN, SpeechActKind.CHECKIN):
-        result = run_colleague(
-            store, group_id=group_id, text=raw, act=act, speaker_key=speaker_key
-        )
+        result = run_colleague(store, group_id=group_id, text=raw, act=act, speaker_key=speaker_key)
         await message.reply_text(result.reply)
         return
 
@@ -1335,16 +1370,16 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         # Questions — always answer, never dump a role sermon.
         # Clear work/role questions in this allowed group do not need an @mention.
         classic_question = any(h in raw for h in QUESTION_HINTS)
-        role_ask = "نقش" in raw and not any(
-            w in raw for w in ("کارها", "تسک", "وظایف")
-        )
+        role_ask = "نقش" in raw and not any(w in raw for w in ("کارها", "تسک", "وظایف"))
         if classic_question or (addressed and role_ask) or (role_ask and _is_question(raw)):
             # Role only when they asked نقش/سمت. Named person + question is not a role dump.
             target = None
             if role_ask:
                 target = named
-                if target is None and mapping and any(
-                    w in raw for w in ("نقش من", "نقشم", "نقش منو", "منو نمیدون")
+                if (
+                    target is None
+                    and mapping
+                    and any(w in raw for w in ("نقش من", "نقشم", "نقش منو", "منو نمیدون"))
                 ):
                     target = mapping.member_key
             if target and role_ask:
@@ -1463,7 +1498,8 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             mapping = store.get_user_mapping(user.id)
             if mapping:
                 assignee = mapping.member_key
-        task = _safe_create_task(store, 
+        task = _safe_create_task(
+            store,
             group_id=group_id,
             title=title,
             description=u.description or parsed.description,
@@ -1560,6 +1596,118 @@ async def setup_nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("setup nudge failed")
 
 
+# --- Follow-up presentation: digest -> one active card -> resolved edit ---
+#
+# A shared group must never see several actionable messages at once. Each
+# run of followup_job sends ONE read-only digest for orientation, then
+# either a small burst (<=3 cards, only when each targets a DIFFERENT named
+# person) or a single active card followed by a persisted queue: the rest
+# are delivered one at a time as each prior card is resolved (see
+# _advance_followup_queue, called from handle_callback).
+FOLLOWUP_MAX_CANDIDATES = 5
+FOLLOWUP_BURST_LIMIT = 3
+FOLLOWUP_SEND_DELAY = 0.6  # seconds between sends in one run; avoids 429s
+_FOLLOWUP_QUEUE_PREFIX = "followup_queue:"
+
+
+def _dedupe_tasks(tasks: list[Task]) -> list[Task]:
+    seen: set[int] = set()
+    out: list[Task] = []
+    for t in tasks:
+        if t.id in seen:
+            continue
+        seen.add(t.id)
+        out.append(t)
+    return out
+
+
+def _burst_eligible(tasks: list[Task]) -> bool:
+    """<=3 items, each for a different named person -> safe to send together."""
+    if not (1 <= len(tasks) <= FOLLOWUP_BURST_LIMIT):
+        return False
+    named = [t.assignee_key for t in tasks if t.assignee_key]
+    return len(named) == len(set(named))
+
+
+def _followup_queue_key(chat_id: int) -> str:
+    return f"{_FOLLOWUP_QUEUE_PREFIX}{chat_id}"
+
+
+def _load_followup_queue(store: TaskStore, chat_id: int) -> list[int]:
+    raw = store.get_kv(_followup_queue_key(chat_id))
+    if not raw:
+        return []
+    try:
+        ids = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(ids, list):
+        return []
+    return [int(i) for i in ids if str(i).lstrip("-").isdigit()]
+
+
+def _save_followup_queue(store: TaskStore, chat_id: int, ids: list[int]) -> None:
+    store.set_kv(_followup_queue_key(chat_id), json.dumps(list(ids)))
+
+
+def _followup_ask_text(task: Task) -> str:
+    title = html_escape(task.title or "")
+    owner = member_display_fa(task.assignee_key) if task.assignee_key else None
+    return followup_question(title, owner)
+
+
+def _followup_markup(task: Task) -> InlineKeyboardMarkup | None:
+    ask = _followup_ask_text(task)
+    rows = question_buttons(ask, kind="fu", context=task.title or "", target_id=task.id)
+    return _markup(rows)
+
+
+async def _send_active_card(bot, chat_id: int, task: Task) -> None:
+    """The ONE next item needing an answer: one card, one keyboard."""
+    ask = _followup_ask_text(task)
+    text = format_task_question(task, ask)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=_followup_markup(task),
+    )
+
+
+async def _advance_followup_queue(bot, store: TaskStore, chat_id: int) -> None:
+    """After a card resolves, send the next queued card for this chat, if any."""
+    ids = _load_followup_queue(store, chat_id)
+    while ids:
+        next_id = ids.pop(0)
+        task = store.get_task(next_id, chat_id)
+        if task is None or task.status not in (TaskStatus.OPEN, TaskStatus.IN_PROGRESS):
+            continue
+        _save_followup_queue(store, chat_id, ids)
+        await _send_active_card(bot, chat_id, task)
+        return
+    _save_followup_queue(store, chat_id, [])
+
+
+async def _run_followup_for_group(bot, store: TaskStore, group_id: int) -> None:
+    class BotSender:
+        async def send(self, message: JobMessage):
+            return await bot.send_message(
+                chat_id=message.chat_id,
+                text=message.text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(message.keyboard or []),
+            )
+
+    await scheduled_followup.run(
+        store,
+        BotSender(),
+        group_id,
+        max_candidates=FOLLOWUP_MAX_CANDIDATES,
+        burst_limit=FOLLOWUP_BURST_LIMIT,
+        send_delay=FOLLOWUP_SEND_DELAY,
+    )
+
+
 async def followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Gentle periodic follow-up for overdue/unowned tasks."""
     settings: Settings = context.bot_data["settings"]
@@ -1572,48 +1720,25 @@ async def followup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     for group_id in allowed:
-        overdue = store.list_overdue_tasks(group_id)
-        unowned = store.list_unowned_open_tasks(group_id)
-        if not overdue and not unowned:
-            continue
-
-        watch = []
-        seen: set[int] = set()
-        for t in list(overdue) + list(unowned):
-            if t.id in seen:
-                continue
-            seen.add(t.id)
-            watch.append(t)
-        lines = ["یه نگاه به کارهای مانده:"]
-        if overdue:
-            lines.append(format_task_list(overdue[:5], header="عقب‌افتاده"))
-        if unowned:
-            lines.append(format_task_list(unowned[:5], header="بدون مسئول"))
         try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                text="\n".join(lines),
-                parse_mode=ParseMode.HTML,
-                reply_markup=_task_followup_markup(watch[:6]),
-            )
+            await _run_followup_for_group(context.bot, store, group_id)
         except Exception:
             logger.exception("Follow-up failed for group %s", group_id)
 
 
-def _task_followup_markup(tasks: list[Task]) -> InlineKeyboardMarkup | None:
-    rows: list[list[tuple[str, str]]] = []
-    seen: set[int] = set()
-    for task in tasks:
-        if task.id in seen:
-            continue
-        seen.add(task.id)
-        ask = followup_question(task.title, member_display_fa(task.assignee_key))
-        rows.extend(
-            question_buttons(
-                ask, kind="td", context=task.title or "", target_id=task.id
-            )
-        )
-    return _markup(rows)
+def _tapped_label(query) -> str | None:
+    """The label of the button the user actually tapped, read from the
+    message's markup as it was before we edit it — the source of truth for
+    "what they chose" in the resolved-edit text."""
+    message = getattr(query, "message", None)
+    markup = getattr(message, "reply_markup", None) if message else None
+    if not markup:
+        return None
+    for row in markup.inline_keyboard:
+        for btn in row:
+            if (getattr(btn, "callback_data", None) or "") == query.data:
+                return getattr(btn, "text", None)
+    return None
 
 
 def _strip_task_buttons(query, task_id: int) -> InlineKeyboardMarkup | None:
@@ -1657,9 +1782,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not owner:
             await query.answer("دیگر لازم نیست.")
             return
-        if not speaker_may_confirm(
-            store, owner, tapper_key, user.id if user else None
-        ):
+        if not speaker_may_confirm(store, owner, tapper_key, user.id if user else None):
             await query.answer(WRONG_SPEAKER_FA, show_alert=True)
             return
         result = apply_voice_callback(
@@ -1681,9 +1804,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if extra:
                 html = html + "\n" + extra
             try:
-                await query.edit_message_text(
-                    html, parse_mode=ParseMode.HTML, reply_markup=None
-                )
+                await query.edit_message_text(html, parse_mode=ParseMode.HTML, reply_markup=None)
             except Exception:
                 if message:
                     await message.reply_text(html, parse_mode=ParseMode.HTML)
@@ -1701,30 +1822,53 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer()
             return
         task_id = int(payload)
+        if not (
+            choice_means_done(choice) or choice_means_wait(choice) or choice_means_changed(choice)
+        ):
+            await query.answer()
+            return
+
+        # Read the tapped label from the ORIGINAL markup before we touch it —
+        # that is the only accurate source for "what they chose".
+        tapped_label = _tapped_label(query) or "پاسخ داده شد"
+        task = store.get_task(task_id, chat_id)
+        if task and task.assignee_key:
+            who = member_display_fa(task.assignee_key)
+        elif tapper_key:
+            who = member_display_fa(tapper_key)
+        else:
+            who = "کسی"
+
         if choice_means_done(choice):
             store.mark_done(
-                task_id,
-                chat_id,
-                actor_key=tapper_key,
-                actor_user_id=user.id if user else None,
+                task_id, chat_id, actor_key=tapper_key, actor_user_id=user.id if user else None
             )
             await query.answer("انجام شد.")
+        elif choice_means_wait(choice):
+            await query.answer("باشه.")
+        else:
+            await query.answer()
+
+        # Edit path: same message, keyboard gone, who answered + what they
+        # chose. Falls back to just stripping the keyboard if the edit is
+        # rejected (e.g. message too old), building on _strip_task_buttons.
+        resolved = format_resolved(who, tapped_label)
+        try:
+            await query.edit_message_text(resolved, parse_mode=ParseMode.HTML, reply_markup=None)
+        except Exception:
             try:
                 await query.edit_message_reply_markup(
                     reply_markup=_strip_task_buttons(query, task_id)
                 )
             except Exception:
                 pass
-            return
-        if choice_means_wait(choice):
-            await query.answer("باشه، می‌ماند.")
-            return
-        if choice_means_changed(choice):
-            await query.answer()
-            if message:
-                await message.reply_text("بگو چی عوض شد.")
-            return
-        await query.answer()
+
+        if choice_means_changed(choice) and message:
+            await message.reply_text("بگو چی عوض شد.")
+
+        # Advance: send the next queued card for this chat, if a follow-up
+        # batch left one waiting.
+        await _advance_followup_queue(context.bot, store, chat_id)
         return
 
     if kind == "qa":
@@ -1771,9 +1915,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             return
         html = render_period_report(store, chat_id, start, end, today=today, label=label)
-        rows = question_buttons(
-            "گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0
-        )
+        rows = question_buttons("گزارش کدام بازه؟", kind="rp", context="هفته ماه", target_id=0)
         try:
             await query.edit_message_text(
                 html,
@@ -1823,18 +1965,14 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     existing_path=existing,
                     telegram_user_id=user.id if user else None,
                 )
-                rows = voice_confirm_button_rows(
-                    message_id, transcript=result.transcript
-                )
+                rows = voice_confirm_button_rows(message_id, transcript=result.transcript)
                 sent = await msg.reply_text(
                     result.reply,
                     parse_mode=ParseMode.HTML,
                     reply_markup=_markup(rows),
                 )
                 if result.member_key and sent is not None:
-                    set_pending_confirm_message_id(
-                        store, result.member_key, sent.message_id
-                    )
+                    set_pending_confirm_message_id(store, result.member_key, sent.message_id)
             except Exception as exc:
                 logger.exception("voice pipeline failed")
                 text = str(exc).strip()

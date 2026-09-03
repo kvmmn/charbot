@@ -2,7 +2,7 @@
 
 charbot is the Telegram coordinator for **چهارستون** (Chaharsotoon). Production is a single Fly.io machine in Frankfurt that receives Telegram webhooks and stores everything in Neon Postgres.
 
-This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Workflow image: [charbot-workflow.png](charbot-workflow.png).
+This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Workflow image: [charbot-workflow.png](charbot-workflow.png). Telegram presentation rules (cards, lists, digests, keyboards): [UI-GUIDELINES.md](UI-GUIDELINES.md).
 
 ## 1. High level
 
@@ -74,11 +74,18 @@ sequenceDiagram
 | `charbot/nlp.py` | Dates, slash commands, `parse_natural_language` (uses the gate first) |
 | `charbot/understand.py` | Colloquial extract: title / owner / due / description, ask if unsure |
 | `charbot/voice.py` | Download, HTTP ASR backends, draft transcript, speaker confirm |
-| `charbot/buttons.py` | 2–4 inline buttons generated from *this* question’s content |
+| `charbot/buttons.py` | Keyboards: 2–4 inline buttons generated from *this* question's content |
 | `charbot/report.py` | Period performance: done / open / overdue per person |
 | `charbot/store.py` | Neon/SQLite; last-line refuse of question-shaped titles |
-| `charbot/formatting.py` | Telegram HTML task cards (title · owner · due only) |
+| `charbot/formatting.py` | Presentation layer: cards, read-only lists, grouped digests, active-card and resolved-edit text, Persian digits + Jalali dates |
 | `charbot/members.py` | Board/staff identity, name matching |
+
+**Presentation invariant:** `charbot/formatting.py` (text/layout) and
+`charbot/buttons.py` (keyboards) are the *only* places that render a task,
+list, digest, or build an `InlineKeyboardMarkup`. `bot.py` and `report.py`
+call into them; no other module may lay out its own text shape or
+construct its own ad-hoc keyboard. Full rules and rendered examples of
+every message type: [UI-GUIDELINES.md](UI-GUIDELINES.md).
 
 ## 4. Speech-act gate (do not bypass)
 
@@ -155,7 +162,15 @@ Period reports (`charbot/report.py`) count per person: done / still open / overd
 ## 7. UX
 
 - Telegram group: short natural Persian. Real `@mentions`. No `گرفتم ثبت شد`.
-- Task cards: title, owner, due only.
+- Presentation model (full contract: [UI-GUIDELINES.md](UI-GUIDELINES.md)):
+  **lists explain; cards ask; edits close the loop.** A read-only list
+  (morning plan, `/open`, `/overdue`, reports, «کارهای X») never carries a
+  keyboard. Exactly one answerable item gets exactly one message with one
+  keyboard — never several tasks' buttons stacked under one message. On
+  tap, that message is *edited* into a resolved record; the next pending
+  item (if any) is sent as a fresh card, one at a time.
+- Task cards: bold title, then one natural Persian line — ring + owner
+  name + Jalali due date. Persian digits throughout, no bare `#id`.
 - Questions to humans: inline buttons generated from **that** question, not a frozen global menu. Tap completes; free text is for corrections.
 - Hamed and Saman roles are stored; never re-ask.
 
@@ -177,3 +192,14 @@ Period reports (`charbot/report.py`) count per person: done / still open / overd
 ## 9. Backup (Grok routines)
 
 Weekday inbox / morning / afternoon / Friday report. They may read Neon. They must **never** call Telegram `getUpdates`.
+
+## 10. Scheduled jobs
+
+The external scheduler invokes the package entrypoints (from `/workspace/charbot-app` with the project environment):
+
+- Morning plan: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.standup`
+- Afternoon follow-up: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.followup`
+- Inbox sweep: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.inbox`
+- Weekly report (Friday noon Berlin): `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.weekly_report`
+
+Every scheduled outbound message is rendered by `charbot.formatting`, `charbot.report`, and `charbot.buttons`, the same presentation layer used by live replies. Jobs use `TaskStore` for Neon/SQLite persistence and never call Telegram `getUpdates`.

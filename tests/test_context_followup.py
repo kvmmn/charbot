@@ -106,7 +106,7 @@ def test_motavajeh_shodi_uses_previous_work_dump(tmp_path: Path) -> None:
     assert ASK_WHO_TEXT not in result.reply
     assert "کاوه" in result.reply
     assert "بررسی فایل تدوین‌شده قرارداد حامد" in result.reply
-    assert "2/9" in result.reply or "۲/۹" in result.reply
+    assert "۱۱ شهریور" in result.reply  # DUE = 2026-09-02 in the Jalali calendar
 
 
 def test_imperative_save_task_uses_context(tmp_path: Path) -> None:

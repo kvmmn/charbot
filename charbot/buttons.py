@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from charbot.formatting import to_fa_digits
+
 # callback_data: kind:choice:id  (Telegram limit 64 bytes)
 _CHOICE_RE = re.compile(r"^[a-z]{1,12}$")
 _KINDS = {"vc", "td", "fu", "ask", "rp", "qa"}
@@ -148,12 +150,17 @@ def question_buttons(
 
 
 def task_pick_buttons(items: list[tuple[str, int]]) -> list[list[tuple[str, str]]]:
-    """2–4 title chips; tap marks that open task done (td:done:id)."""
-    pairs = [
-        (_clip(label), f"td:done:{tid}")
-        for label, tid in items[:4]
-        if (label or "").strip()
-    ]
+    """2-4 title chips; the buttons ARE the list, so each carries its task
+    number (no visible "#12" anchor elsewhere, but here a human genuinely
+    needs the reference to tell same-sounding tasks apart). Tap marks that
+    task done (td:done:id)."""
+    pairs = []
+    for label, tid in items[:4]:
+        title = (label or "").strip()
+        if not title:
+            continue
+        tagged = f"کار {to_fa_digits(tid)}: {title}"
+        pairs.append((_clip(tagged), f"td:done:{tid}"))
     if not pairs:
         return []
     if len(pairs) <= 3:

@@ -1,14 +1,94 @@
-"""Clean task cards for Telegram (blockquote, color ring per person)."""
+"""Telegram presentation layer: cards, lists, digests, active questions, edits.
+
+Governing rule: **lists explain; cards ask; edits close the loop.**
+
+No other module should invent its own text layout or keyboard shape — bot.py
+and report.py call into here (and into charbot/buttons.py for keyboards) so
+every surface in the group reads the same way. See docs/UI-GUIDELINES.md for
+the full design contract with rendered examples of every message type.
+"""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from html import escape
 
 from charbot.members import member_display_fa
 from charbot.store import Task
 
-# Telegram cannot color the quote bar. A colored ring is the person mark.
+# ---------------------------------------------------------------------------
+# Persian digits + the Jalali (Solar Hijri) calendar.
+# Dates read in Persian by name ("۷ شهریور"), never as bare Gregorian slashes.
+# ---------------------------------------------------------------------------
+
+_ASCII_TO_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def to_fa_digits(value: int | str) -> str:
+    """Render any ASCII digits in ``value`` as Persian digits."""
+    return str(value).translate(_ASCII_TO_FA_DIGITS)
+
+
+JALALI_MONTHS = (
+    "فروردین",
+    "اردیبهشت",
+    "خرداد",
+    "تیر",
+    "مرداد",
+    "شهریور",
+    "مهر",
+    "آبان",
+    "آذر",
+    "دی",
+    "بهمن",
+    "اسفند",
+)
+
+
+def _gregorian_to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    """Standard Gregorian→Jalali conversion (public-domain algorithm)."""
+    g_d_m = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (
+        355666
+        + 365 * gy
+        + (gy2 + 3) // 4
+        - (gy2 + 99) // 100
+        + (gy2 + 399) // 400
+        + gd
+        + g_d_m[gm - 1]
+    )
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + (days - 186) % 30
+    return jy, jm, jd
+
+
+def jalali_label(d: date) -> str:
+    """``2026-08-29`` → ``۷ شهریور`` — day + Persian month name, Persian digits."""
+    _, jm, jd = _gregorian_to_jalali(d.year, d.month, d.day)
+    return f"{to_fa_digits(jd)} {JALALI_MONTHS[jm - 1]}"
+
+
+def format_time_fa(dt: datetime) -> str:
+    return to_fa_digits(f"{dt.hour:02d}:{dt.minute:02d}")
+
+
+# ---------------------------------------------------------------------------
+# Identity: the written name is primary. The ring is only ever a secondary
+# cue glued to the name — never a stand-in status code.
+# ---------------------------------------------------------------------------
+
 PERSON_MARK = {
     "kawe": "🔵",
     "hamed": "🟢",
@@ -17,6 +97,7 @@ PERSON_MARK = {
     "ghazal": "🟣",
 }
 UNASSIGNED_MARK = "⚪"
+UNASSIGNED_LABEL = "بدون مسئول"
 
 
 def person_mark(key: str | None) -> str:
@@ -25,30 +106,264 @@ def person_mark(key: str | None) -> str:
     return PERSON_MARK.get(key, UNASSIGNED_MARK)
 
 
-def _due_label(d: date | None) -> str:
-    if not d:
+def person_label(key: str | None) -> str:
+    """Ring + full name together (identity is never ring-only)."""
+    if not key:
+        return f"{UNASSIGNED_MARK} {UNASSIGNED_LABEL}"
+    return f"{person_mark(key)} {escape(member_display_fa(key))}"
+
+
+# ---------------------------------------------------------------------------
+# Due-date phrasing. Natural Persian sentences, no "·" separator.
+# ---------------------------------------------------------------------------
+
+
+def _due_sentence(due_date: date | None, today: date) -> str:
+    """Full sentence with a day-count — used where one task is in focus."""
+    if due_date is None:
         return "بدون موعد"
-    label = f"{d.day}/{d.month}"
-    if d < date.today():
-        label += " عقب‌افتاده"
-    return label
+    label = jalali_label(due_date)
+    if due_date < today:
+        days = (today - due_date).days
+        return f"موعد {label}، {to_fa_digits(days)} روز عقب‌افتاده"
+    if due_date == today:
+        return "موعد امروز"
+    days = (due_date - today).days
+    return f"موعد {label}، {to_fa_digits(days)} روز مانده"
 
 
-def format_task(task: Task, *, locale_hint: str = "fa") -> str:
-    """One blockquote card: title, then ring + due + owner. Matches group UI."""
-    del locale_hint
-    title = escape(task.title.strip() or "بدون عنوان")
-    owner = escape(member_display_fa(task.assignee_key))
-    due = escape(_due_label(task.due_date))
-    mark = person_mark(task.assignee_key)
-    return f"<blockquote><b>{title}</b>\n{mark} {due} {owner}</blockquote>"
+def _due_short(due_date: date | None, today: date) -> str:
+    """Compact phrase (no day-count) — used inside lists and digests."""
+    if due_date is None:
+        return "بدون موعد"
+    if due_date == today:
+        return "موعد امروز"
+    return f"موعد {jalali_label(due_date)}"
 
 
-def format_task_list(tasks: list[Task], *, header: str) -> str:
+# ---------------------------------------------------------------------------
+# Progressive disclosure. Reserved for the actual overflow payload — never
+# used as decoration around a type label or a metadata line.
+# ---------------------------------------------------------------------------
+
+LIST_INLINE_MAX = 6
+DIGEST_INLINE_MAX = 6
+
+
+def wrap_expandable(inner: str) -> str:
+    return f"<blockquote expandable>{inner}</blockquote>"
+
+
+# ---------------------------------------------------------------------------
+# Single task: title (subject) + one natural metadata line. No blockquote —
+# blockquote-for-everything flattens rank. This is the shared "payload" used
+# both stand-alone (format_task_confirmation) and inside an active card.
+# ---------------------------------------------------------------------------
+
+
+def format_task(task: Task, *, today: date | None = None) -> str:
+    today = today or date.today()
+    title = escape((task.title or "").strip() or "بدون عنوان")
+    who = person_label(task.assignee_key)
+    due = _due_sentence(task.due_date, today)
+    return f"<b>{title}</b>\n{who}، {due}"
+
+
+def format_task_confirmation(
+    task: Task, *, type_label: str = "ثبت شد", note: str | None = None, today: date | None = None
+) -> str:
+    """<type label> + blank + optional note + the task payload. No keyboard."""
+    lines = [f"<b>{escape(type_label)}</b>", ""]
+    if note:
+        lines.append(note)
+    lines.append(format_task(task, today=today))
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Flat read-only lists: /open, /overdue, "کارهای X". Numbered, never buttoned.
+# ---------------------------------------------------------------------------
+
+
+def _numbered_line(n: int, task: Task, today: date) -> str:
+    title = escape((task.title or "").strip() or "بدون عنوان")
+    due = _due_short(task.due_date, today)
+    owner = person_label(task.assignee_key)
+    return f"{to_fa_digits(n)}. {title} — {due} — {owner}"
+
+
+def _flat_body(tasks: list[Task], today: date) -> str:
+    lines = [_numbered_line(i + 1, t, today) for i, t in enumerate(tasks)]
+    head, rest = lines[:LIST_INLINE_MAX], lines[LIST_INLINE_MAX:]
+    body = "\n".join(head)
+    if rest:
+        body += "\n" + wrap_expandable("\n".join(rest))
+    return body
+
+
+def format_task_list(tasks: list[Task], *, header: str, today: date | None = None) -> str:
+    """Read-only. Never attach a reply_markup to this text — see rule in
+    docs/UI-GUIDELINES.md: lists explain, they never ask."""
+    today = today or date.today()
     if not tasks:
-        return f"<b>{escape(header)}</b>\nچیزی در لیست نیست."
-    cards = "\n".join(format_task(t) for t in tasks)
-    return f"<b>{escape(header)}</b>\n{cards}"
+        return f"<b>{escape(header)}</b>\n\nچیزی در لیست نیست."
+    return f"<b>{escape(header)}</b>\n\n{_flat_body(tasks, today)}"
+
+
+def _needs_decision(task: Task, today: date) -> bool:
+    if task.assignee_key is None:
+        return True
+    return task.due_date is not None and task.due_date < today
+
+
+def format_daily_plan(
+    tasks: list[Task], *, decisions: int | None = None, today: date | None = None
+) -> str:
+    """<b>برنامهٔ امروز</b> — compact read-only orientation. No keyboard here;
+    the caller follows with at most one active card when exactly one
+    decision is pending (see bot.cmd_standup)."""
+    today = today or date.today()
+    if not tasks:
+        return "<b>برنامهٔ امروز</b>\n\nکاری در لیست نیست."
+    if decisions is None:
+        decisions = sum(1 for t in tasks if _needs_decision(t, today))
+    summary = f"{to_fa_digits(len(tasks))} کار"
+    if decisions:
+        summary += f"، {to_fa_digits(decisions)} تصمیم"
+    return f"<b>برنامهٔ امروز</b>\n\n{summary}\n{_flat_body(tasks, today)}"
+
+
+# ---------------------------------------------------------------------------
+# Grouped digest: person-by-person, most urgent group first. Urgent overdue
+# work is never buried in the expandable tail — only history/low-priority
+# groups get collapsed once the visible budget is spent.
+# ---------------------------------------------------------------------------
+
+
+def _sort_key(task: Task, today: date) -> tuple[int, date, int]:
+    if task.due_date is None:
+        return (2, date.max, task.id)
+    if task.due_date < today:
+        return (0, task.due_date, task.id)
+    return (1, task.due_date, task.id)
+
+
+def _group_by_person(tasks: list[Task], today: date) -> list[tuple[str | None, list[Task]]]:
+    buckets: dict[str | None, list[Task]] = {}
+    for t in tasks:
+        buckets.setdefault(t.assignee_key, []).append(t)
+    groups = [
+        (key, sorted(group, key=lambda t: _sort_key(t, today))) for key, group in buckets.items()
+    ]
+
+    def priority(item: tuple[str | None, list[Task]]) -> tuple[tuple[int, date, int], bool]:
+        key, group = item
+        return (_sort_key(group[0], today), key is None)
+
+    groups.sort(key=priority)
+    return groups
+
+
+def format_task_digest(
+    tasks: list[Task],
+    *,
+    header: str,
+    today: date | None = None,
+    unassigned_label: str = UNASSIGNED_LABEL,
+) -> str:
+    """Read-only. Groups by owner; ring+name appears once, in the section
+    header, and is omitted from the numbered items under it."""
+    today = today or date.today()
+    if not tasks:
+        return f"<b>{escape(header)}</b>\n\nچیزی نیست."
+
+    groups = _group_by_person(tasks, today)
+    total = len(tasks)
+    n_people = sum(1 for key, _ in groups if key)
+    has_unassigned = any(key is None for key, _ in groups)
+
+    summary = f"{to_fa_digits(total)} کار"
+    if n_people:
+        summary += f" برای {to_fa_digits(n_people)} نفر"
+    if has_unassigned:
+        summary += " و بدون مسئول" if n_people else f" {unassigned_label}"
+
+    sections: list[str] = []
+    overflow: list[str] = []
+    shown = 0
+    for key, group_tasks in groups:
+        name = unassigned_label if key is None else escape(member_display_fa(key))
+        ring = person_mark(key)
+        section_head = f"<b>{ring} {name} — {to_fa_digits(len(group_tasks))} کار</b>"
+        lines = [
+            f"{to_fa_digits(i + 1)}. {escape((t.title or '').strip() or 'بدون عنوان')}"
+            f" — {_due_short(t.due_date, today)}"
+            for i, t in enumerate(group_tasks)
+        ]
+        section = section_head + "\n" + "\n".join(lines)
+        if shown < DIGEST_INLINE_MAX:
+            sections.append(section)
+            shown += len(group_tasks)
+        else:
+            overflow.append(section)
+
+    body = "\n\n".join(sections)
+    if overflow:
+        body += "\n\n" + wrap_expandable("\n\n".join(overflow))
+    return f"<b>{escape(header)}</b>\n\n{summary}\n\n{body}"
+
+
+# ---------------------------------------------------------------------------
+# Active card: the ONE next item that genuinely needs an answer. One
+# keyboard, built by charbot/buttons.py, is attached by the caller.
+# ---------------------------------------------------------------------------
+
+
+def format_active_card(subject: str, meta: str) -> str:
+    return f"<b>پاسخ لازم</b>\n\n{subject}\n{meta}"
+
+
+def format_task_question(task: Task, question: str, *, today: date | None = None) -> str:
+    today = today or date.today()
+    meta = _due_sentence(task.due_date, today)
+    if not task.assignee_key:
+        meta = f"{UNASSIGNED_LABEL}، {meta}"
+    return format_active_card(question, meta)
+
+
+# ---------------------------------------------------------------------------
+# Resolved edit: what the digest/active-card message becomes once someone
+# taps. Same message, keyboard gone, who answered + what they chose.
+# ---------------------------------------------------------------------------
+
+
+def format_resolved(who: str, chosen_label: str, *, when: datetime | None = None) -> str:
+    when = when or datetime.now()
+    today = date.today()
+    time_str = format_time_fa(when)
+    when_word = "امروز" if when.date() == today else jalali_label(when.date())
+    return f"<b>ثبت شد</b>\n\n{who}: {chosen_label}\nپاسخ {when_word}، {time_str}"
+
+
+# ---------------------------------------------------------------------------
+# Escalation alert for a single badly-overdue item: owner + consequence +
+# suggested next action. Distinct from the plural "کارهای عقب‌افتاده" digest.
+# ---------------------------------------------------------------------------
+
+
+def format_overdue_alert(
+    task: Task, *, consequence: str, next_action: str, today: date | None = None
+) -> str:
+    today = today or date.today()
+    title = escape((task.title or "").strip() or "بدون عنوان")
+    who = person_label(task.assignee_key)
+    due = _due_sentence(task.due_date, today)
+    return (
+        f"<b>عقب‌افتاده</b>\n\n"
+        f"{who} — {title}\n"
+        f"{due}؛ {escape(consequence)}\n"
+        f"پیشنهاد: {escape(next_action)}"
+    )
 
 
 HELP_TEXT = """<b>چاربات</b> هماهنگ‌کننده چهارستون.
@@ -59,3 +374,7 @@ HELP_TEXT = """<b>چاربات</b> هماهنگ‌کننده چهارستون.
 /open کارهای باز
 /overdue عقب‌افتاده
 """
+
+
+def format_followup_queue_notice(count: int) -> str:
+    return f"{to_fa_digits(count)} کار دیگر در نوبت است."
