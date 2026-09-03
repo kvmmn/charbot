@@ -10,6 +10,8 @@ import pytest
 from charbot.bot import (
     has_pending_create_draft,
     interpret_work_or_followup,
+    open_tasks_for,
+    open_tasks_for_completion,
     save_pending_create_draft,
 )
 from charbot.intent import (
@@ -19,6 +21,7 @@ from charbot.intent import (
     may_create_task,
     must_reply,
 )
+from charbot.members import chase_via
 from charbot.nlp import NLIntent, parse_natural_language
 from charbot.store import TaskStore
 from charbot.understand import extract_task
@@ -163,6 +166,7 @@ def test_gate_runs_before_role_dump() -> None:
     assert src.find("SpeechActKind.LIST_TASKS") < src.find("classic_question")
     assert src.find("SpeechActKind.QUERY_ROLE") < src.find("classic_question")
     from charbot import nlp
+
     nsrc = inspect.getsource(nlp.parse_natural_language)
     assert nsrc.find("classify_speech_act") < nsrc.find("understood = extract_task")
     assert nsrc.find("SpeechActKind.LIST_TASKS") < nsrc.find("understood = extract_task")
@@ -305,9 +309,7 @@ def test_done_report_several_matches_asks_with_buttons(tmp_path: Path) -> None:
     store.create_task(
         group_id=GROUP, title="بررسی قرارداد الف", assignee_key="kawe", due_date=TODAY
     )
-    store.create_task(
-        group_id=GROUP, title="بررسی قرارداد ب", assignee_key="kawe", due_date=TODAY
-    )
+    store.create_task(group_id=GROUP, title="بررسی قرارداد ب", assignee_key="kawe", due_date=TODAY)
     result = interpret_work_or_followup(
         store,
         chat_id=GROUP,
@@ -345,3 +347,135 @@ def test_done_report_no_match_never_creates(tmp_path: Path) -> None:
     labels = [label for row in rows for label, _data in row]
     assert any("لوگو" in label for label in labels)
     assert store.list_open_tasks(GROUP)
+
+
+def _board_store(tmp_path: Path) -> TaskStore:
+    store = TaskStore(tmp_path / "chase-done.db")
+    store.upsert_user_mapping(
+        telegram_user_id=42, member_key="kawe", username="kvmmn", display_name="Kawe"
+    )
+    store.upsert_user_mapping(
+        telegram_user_id=2, member_key="hamed", username="hamed", display_name="Hamed"
+    )
+    store.upsert_user_mapping(
+        telegram_user_id=3, member_key="saman", username="saman", display_name="Saman"
+    )
+    return store
+
+
+def test_open_tasks_for_completion_includes_chase_via_and_kawe(tmp_path: Path) -> None:
+    store = _board_store(tmp_path)
+    logo = store.create_task(
+        group_id=GROUP, title="اجرای سه لوگو", assignee_key="ghazal", due_date=TODAY
+    )
+    minutes = store.create_task(
+        group_id=GROUP, title="صورتجلسه هیئت مدیره", assignee_key="hamed", due_date=TODAY
+    )
+    flight = store.create_task(
+        group_id=GROUP, title="بلیط پرواز مشهد", assignee_key="saman", due_date=TODAY
+    )
+    hamed_ids = {t.id for t in open_tasks_for_completion(store, GROUP, "hamed")}
+    assert hamed_ids == {logo.id, minutes.id}
+    saman_ids = {t.id for t in open_tasks_for_completion(store, GROUP, "saman")}
+    assert saman_ids == {flight.id}
+    kawe_ids = {t.id for t in open_tasks_for_completion(store, GROUP, "kawe")}
+    assert kawe_ids == {logo.id, minutes.id, flight.id}
+    assert [t.id for t in open_tasks_for(store, GROUP, "hamed")] == [minutes.id]
+    assert chase_via("ghazal") == "hamed"
+    assert chase_via("saman") == "saman"
+
+
+def test_hamed_done_report_marks_ghazal_logo(tmp_path: Path) -> None:
+    store = _board_store(tmp_path)
+    logo = store.create_task(
+        group_id=GROUP, title="اجرای سه لوگو", assignee_key="ghazal", due_date=TODAY
+    )
+    store.create_task(
+        group_id=GROUP, title="صورتجلسه هیئت مدیره", assignee_key="hamed", due_date=TODAY
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw="لوگو تموم شد",
+        speaker_key="hamed",
+        speaker_user_id=2,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is True
+    assert result.task is not None
+    assert result.task.id == logo.id
+    fetched = store.get_task(logo.id, GROUP)
+    assert fetched is not None
+    assert fetched.assignee_key == "ghazal"
+    assert fetched.completed_at is not None
+    assert "تکمیل" in (result.reply or "")
+
+
+def test_kawe_done_report_marks_ghazal_logo(tmp_path: Path) -> None:
+    store = _board_store(tmp_path)
+    logo = store.create_task(
+        group_id=GROUP, title="اجرای سه لوگو", assignee_key="ghazal", due_date=TODAY
+    )
+    store.create_task(group_id=GROUP, title="بلیط پرواز مشهد", assignee_key="saman", due_date=TODAY)
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw="لوگو تموم شد",
+        speaker_key="kawe",
+        speaker_user_id=42,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is True
+    assert result.task is not None
+    assert result.task.id == logo.id
+    fetched = store.get_task(logo.id, GROUP)
+    assert fetched is not None
+    assert fetched.assignee_key == "ghazal"
+    assert fetched.completed_at is not None
+
+
+def test_saman_done_report_does_not_steal_ghazal_logo(tmp_path: Path) -> None:
+    store = _board_store(tmp_path)
+    logo = store.create_task(
+        group_id=GROUP, title="اجرای سه لوگو", assignee_key="ghazal", due_date=TODAY
+    )
+    flight = store.create_task(
+        group_id=GROUP, title="بلیط پرواز مشهد", assignee_key="saman", due_date=TODAY
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw="لوگو تموم شد",
+        speaker_key="saman",
+        speaker_user_id=3,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is False
+    assert store.get_task(logo.id, GROUP).completed_at is None
+    assert store.get_task(flight.id, GROUP).completed_at is None
+
+
+def test_hamed_done_report_still_completes_own_task(tmp_path: Path) -> None:
+    store = _board_store(tmp_path)
+    store.create_task(group_id=GROUP, title="اجرای سه لوگو", assignee_key="ghazal", due_date=TODAY)
+    minutes = store.create_task(
+        group_id=GROUP, title="صورتجلسه هیئت مدیره", assignee_key="hamed", due_date=TODAY
+    )
+    result = interpret_work_or_followup(
+        store,
+        chat_id=GROUP,
+        raw="صورتجلسه تموم شد",
+        speaker_key="hamed",
+        speaker_user_id=2,
+        today=TODAY,
+    )
+    assert result.created is False
+    assert result.completed is True
+    assert result.task is not None
+    assert result.task.id == minutes.id
+    assert store.get_task(minutes.id, GROUP).completed_at is not None
+    logo = next(t for t in store.list_open_tasks(GROUP) if t.assignee_key == "ghazal")
+    assert logo.completed_at is None

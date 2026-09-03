@@ -138,7 +138,7 @@ substitute for the name. Rules:
 - Status is a **word** (`عقب‌افتاده` / `امروز` / `بدون موعد` / `پیش‌رو`),
   never a second colored circle competing with the person ring for
   attention.
-- Ghazal is not in X-Chaharsotoon; chase via Hamed (follow-up questions, @mentions, active cards). `assignee_key` stays `ghazal`.
+- Ghazal is not in X-Chaharsotoon; chase via Hamed (follow-up questions, @mentions, active cards). `assignee_key` stays `ghazal`. Completion reports from the chase contact or from Kawe can close the assignee's task.
 
 ## 6. Persian digits, Jalali dates, no "·"
 

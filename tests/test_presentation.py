@@ -309,30 +309,61 @@ async def test_callback_resolves_message_and_advances_queue(tmp_path, monkeypatc
     assert json.loads(store.get_kv(bot._followup_queue_key(GROUP))) == []
 
 
-@pytest.mark.asyncio
-async def test_callback_done_choice_marks_task_done(tmp_path):
-    store = _store(tmp_path)
-    tasks = _real_overdue_tasks(store)
-    task = tasks[0]
+def _done_button_for(task):
     rows = bot.question_buttons(
         bot._followup_ask_text(task), kind="fu", context=task.title, target_id=task.id
     )
-    # find the "done"-meaning button
-    done_pair = next(
+    return next(
         (label, data)
         for row in rows
         for label, data in row
         if bot.choice_means_done(data.split(":")[1])
     )
+
+
+@pytest.mark.asyncio
+async def test_callback_done_choice_marks_task_done(tmp_path):
+    store = _store(tmp_path)
+    tasks = _real_overdue_tasks(store)
+    task = tasks[0]
+    assert task.assignee_key == "ghazal"
+    done_pair = _done_button_for(task)
     markup = FakeMarkup([[FakeButton(*done_pair)]])
     query = FakeQuery(done_pair[1], FakeQueryMessage(chat_id=GROUP, reply_markup=markup))
     context = FakeContext(store, _settings())
+    # FakeUser id=1 is mapped to kawe — chairman tap on a Ghazal card.
     update = FakeUpdate(callback_query=query, user=FakeUser())
 
     await bot.handle_callback(update, context)
 
     refreshed = store.get_task(task.id, GROUP)
     assert refreshed.status.value == "done"
+    assert refreshed.assignee_key == "ghazal"
+
+
+@pytest.mark.asyncio
+async def test_callback_hamed_done_on_ghazal_task_marks_done(tmp_path):
+    store = _store(tmp_path)
+    store.upsert_user_mapping(
+        telegram_user_id=2, member_key="hamed", username="hamed", display_name="Hamed"
+    )
+    tasks = _real_overdue_tasks(store)
+    task = tasks[0]
+    assert task.assignee_key == "ghazal"
+    done_pair = _done_button_for(task)
+    markup = FakeMarkup([[FakeButton(*done_pair)]])
+    query = FakeQuery(done_pair[1], FakeQueryMessage(chat_id=GROUP, reply_markup=markup))
+    context = FakeContext(store, _settings())
+    update = FakeUpdate(
+        callback_query=query,
+        user=FakeUser(id=2, username="hamed", full_name="Hamed", first_name="Hamed"),
+    )
+
+    await bot.handle_callback(update, context)
+
+    refreshed = store.get_task(task.id, GROUP)
+    assert refreshed.status.value == "done"
+    assert refreshed.assignee_key == "ghazal"
 
 
 # ---------------------------------------------------------------------------

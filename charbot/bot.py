@@ -440,7 +440,7 @@ def _content_tokens(text: str) -> set[str]:
 
 
 def _rank_open_matches(tasks: list[Task], text: str, *, today: date) -> list[Task]:
-    """Score speaker open tasks by title/description overlap; due-today is a boost."""
+    """Score candidate open tasks by title/description overlap; due-today is a boost."""
     raw = text or ""
     utt = _content_tokens(raw)
     scored: list[tuple[int, Task]] = []
@@ -495,10 +495,15 @@ def complete_reported_work(
     speaker_user_id: int | None = None,
     today: date | None = None,
 ) -> WorkFollowup:
-    """Match a completion report to the speaker's open work. Never create."""
+    """Match a completion report to work the speaker may close. Never create.
+
+    Candidates are the speaker's own open tasks, tasks chased via them
+    (Hamed for Ghazal), and — when the speaker is Kawe — every open task
+    in the group. Ranking still requires a clear title match.
+    """
     today = today or date.today()
     clear_pending_create_draft(store, speaker_key)
-    mine = open_tasks_for(store, chat_id, speaker_key)
+    mine = open_tasks_for_completion(store, chat_id, speaker_key)
     matches = _rank_open_matches(mine, raw, today=today)
     if len(matches) == 1:
         task = store.mark_done(
@@ -540,6 +545,26 @@ def open_tasks_for(store: TaskStore, group_id: int, person_key: str | None) -> l
     if person_key:
         return [t for t in tasks if t.assignee_key == person_key]
     return tasks
+
+
+def open_tasks_for_completion(
+    store: TaskStore, group_id: int, speaker_key: str | None
+) -> list[Task]:
+    """Open tasks a speaker may mark done: own, chase-via, or (Kawe) the board.
+
+    Assignee on the card does not change. Ghazal stays ``ghazal``; Hamed is
+    her chase contact so her work is in his completion set. Kawe coordinates
+    and often reports on behalf of others. Callers still rank; a clear title
+    match wins, and ambiguous sets are not auto-completed.
+    """
+    tasks = store.list_open_tasks(group_id)
+    if not speaker_key or speaker_key == "kawe":
+        return tasks
+    return [
+        t
+        for t in tasks
+        if t.assignee_key == speaker_key or chase_via(t.assignee_key) == speaker_key
+    ]
 
 
 def render_open_task_messages(
