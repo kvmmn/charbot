@@ -407,8 +407,8 @@ def test_followup_ask_text_for_ghazal_addresses_hamed():
 
     t = _task(assignee_key="ghazal", title="اجرای سه لوگو")
     ask = _followup_ask_text(t)
-    assert "حامد" in ask
-    assert "غزل" in ask
+    assert ask.startswith("حامد، از غزل بپرس:")
+    assert "اجرای سه لوگو" in ask
 
 
 def test_active_message_for_ghazal_addresses_hamed():
@@ -416,8 +416,8 @@ def test_active_message_for_ghazal_addresses_hamed():
 
     t = _task(assignee_key="ghazal", due_date=date(2026, 8, 29), title="اجرای سه لوگو")
     msg = active_message(t, chat_id=-1, today=TODAY)
-    assert "حامد" in msg.text
-    assert "غزل" in msg.text
+    assert "حامد، از غزل بپرس:" in msg.text
+    assert "۵ روز عقب‌افتاده" in msg.text
 
 
 def test_two_ghazal_tasks_are_not_burst_eligible():
@@ -434,3 +434,27 @@ def test_two_ghazal_tasks_are_not_burst_eligible():
     saman = _task(id=4, assignee_key="saman", title="کار سامان")
     assert bot_burst([hamed, saman])
     assert job_burst([hamed, saman], 3)
+
+def test_due_sentence_today_and_tomorrow_bands():
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from charbot.formatting import _due_sentence
+
+    berlin = ZoneInfo("Europe/Berlin")
+    assert _due_sentence(TODAY, TODAY, now=datetime(2026, 9, 3, 11, tzinfo=berlin)) == "موعد امروز"
+    assert (
+        _due_sentence(TODAY, TODAY, now=datetime(2026, 9, 3, 17, tzinfo=berlin))
+        == "موعد امروز، هنوز مانده"
+    )
+    assert _due_sentence(TODAY + timedelta(days=1), TODAY) == "موعد فردا"
+
+
+def test_due_short_uses_tomorrow_label():
+    from datetime import timedelta
+
+    from charbot.formatting import _due_short
+
+    assert _due_short(TODAY + timedelta(days=1), TODAY) == "موعد فردا"
+    assert _due_short(TODAY, TODAY) == "موعد امروز"
+

@@ -168,12 +168,32 @@ def task_pick_buttons(items: list[tuple[str, int]]) -> list[list[tuple[str, str]
     return [pairs[:2], pairs[2:]]
 
 
-def followup_question(title: str, owner_fa: str | None = None) -> str:
-    """One short colleague-style ask about this piece of work."""
+def followup_question(
+    title: str,
+    owner_fa: str | None = None,
+    *,
+    via_fa: str | None = None,
+) -> str:
+    """One short colleague-style ask about this piece of work.
+
+    When ``via_fa`` differs from ``owner_fa`` (chase-via, e.g. Ghazal via
+    Hamed), the question addresses the chase contact and names the real
+    owner: «حامد، از غزل بپرس: … چه شد؟». The urgency *type* label stays
+    separate — chase never becomes a fourth due band.
+    """
     work = (title or "کار").strip() or "کار"
     who = (owner_fa or "").strip()
-    prefix = f"{who}، " if who else ""
+    via = (via_fa or "").strip()
     place = _place_in(work)
+    if via and who and via != who:
+        if place and place != "سفر":
+            body = f"{place} چه شد؟ رفتی؟"
+        elif any(h in work for h in _PAY_HINTS):
+            body = f"واریز {work} انجام شد؟"
+        else:
+            body = f"{work} چه شد؟"
+        return f"{via}، از {who} بپرس: {body}"
+    prefix = f"{who}، " if who else ""
     if place and place != "سفر":
         return f"{prefix}{place} چه شد؟ رفتی؟"
     if any(h in work for h in _PAY_HINTS):

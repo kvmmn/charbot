@@ -10,11 +10,15 @@ the full design contract with rendered examples of every message type.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import escape
+from zoneinfo import ZoneInfo
 
 from charbot.members import chase_via, member_display_fa
 from charbot.store import Task
+
+BERLIN = ZoneInfo("Europe/Berlin")
+TODAY_LATE_HOUR = 16  # Europe/Berlin: afternoon pressure on due-today meta
 
 # ---------------------------------------------------------------------------
 # Persian digits + the Jalali (Solar Hijri) calendar.
@@ -118,8 +122,25 @@ def person_label(key: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _due_sentence(due_date: date | None, today: date) -> str:
-    """Full sentence with a day-count — used where one task is in focus."""
+def _berlin_clock(now: datetime | None = None) -> datetime:
+    clock = now or datetime.now(BERLIN)
+    if clock.tzinfo is None:
+        return clock.replace(tzinfo=BERLIN)
+    return clock.astimezone(BERLIN)
+
+
+def _due_sentence(
+    due_date: date | None,
+    today: date,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Full sentence for an active card / single-task focus.
+
+    Absolute calendar bands (Europe/Berlin day), not soft synonyms:
+    overdue keeps «N روز عقب‌افتاده»; today is «موعد امروز» (with
+    «هنوز مانده» after ~16:00); tomorrow is «موعد فردا» — never «۰ روز».
+    """
     if due_date is None:
         return "بدون موعد"
     label = jalali_label(due_date)
@@ -127,7 +148,11 @@ def _due_sentence(due_date: date | None, today: date) -> str:
         days = (today - due_date).days
         return f"موعد {label}، {to_fa_digits(days)} روز عقب‌افتاده"
     if due_date == today:
+        if _berlin_clock(now).hour >= TODAY_LATE_HOUR:
+            return "موعد امروز، هنوز مانده"
         return "موعد امروز"
+    if due_date == today + timedelta(days=1):
+        return "موعد فردا"
     days = (due_date - today).days
     return f"موعد {label}، {to_fa_digits(days)} روز مانده"
 
@@ -138,6 +163,8 @@ def _due_short(due_date: date | None, today: date) -> str:
         return "بدون موعد"
     if due_date == today:
         return "موعد امروز"
+    if due_date == today + timedelta(days=1):
+        return "موعد فردا"
     return f"موعد {jalali_label(due_date)}"
 
 
@@ -161,11 +188,13 @@ def wrap_expandable(inner: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_task(task: Task, *, today: date | None = None) -> str:
+def format_task(
+    task: Task, *, today: date | None = None, now: datetime | None = None
+) -> str:
     today = today or date.today()
     title = escape((task.title or "").strip() or "بدون عنوان")
     who = person_label(task.assignee_key)
-    due = _due_sentence(task.due_date, today)
+    due = _due_sentence(task.due_date, today, now=now)
     return f"<b>{title}</b>\n{who}، {due}"
 
 
@@ -300,6 +329,19 @@ def _person_message(
     return head + "\n" + body
 
 
+def order_tasks_for_cards(tasks: list[Task], *, today: date | None = None) -> list[Task]:
+    """Flatten person groups for sequential active cards.
+
+    Within a band: most-urgent person first, finish that person's items
+    before jumping to the next person. Unassigned last.
+    """
+    today = today or date.today()
+    ordered: list[Task] = []
+    for _, group in _group_by_person(tasks, today):
+        ordered.extend(group)
+    return ordered
+
+
 def format_person_list_messages(
     tasks: list[Task],
     *,
@@ -354,9 +396,15 @@ def format_active_card(subject: str, meta: str) -> str:
     return f"<b>پاسخ لازم</b>\n\n{subject}\n{meta}"
 
 
-def format_task_question(task: Task, question: str, *, today: date | None = None) -> str:
+def format_task_question(
+    task: Task,
+    question: str,
+    *,
+    today: date | None = None,
+    now: datetime | None = None,
+) -> str:
     today = today or date.today()
-    meta = _due_sentence(task.due_date, today)
+    meta = _due_sentence(task.due_date, today, now=now)
     if not task.assignee_key:
         meta = f"{UNASSIGNED_LABEL}، {meta}"
     return format_active_card(question, meta)

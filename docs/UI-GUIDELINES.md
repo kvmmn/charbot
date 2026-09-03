@@ -114,8 +114,9 @@ Persian digits everywhere; no other icon system.
 |---|---|---|
 | `<b>برنامهٔ امروز</b>` | Intro + one read-only message per person, no keyboard | `format_person_list_messages`, `bot.cmd_standup` |
 | `<b>کارهای عقب‌افتاده</b>` / `<b>کارهای باز</b>` | Multi-person: intro + one message per person. Single-person («کارهای سامان»): one flat list. No keyboard | `format_person_list_messages`, `format_task_list` |
+| `<b>عقب‌افتاده</b>` / `<b>موعد امروز</b>` / `<b>موعد فردا</b>` | Urgency bands: intro + one read-only message per person per band. Never merge bands; never a fourth «در حال دیر شدن» label | `charbot.jobs.urgency`, `format_person_list_messages` |
 | `<b>پاسخ لازم</b>` | One direct question + one keyboard (the active card) | `format_active_card`, `format_task_question` |
-| `<b>عقب‌افتاده</b>` | Single-item alert: owner + consequence + suggested next action | `format_overdue_alert` |
+| `<b>عقب‌افتاده</b>` (single alert) | Single-item alert: owner + consequence + suggested next action | `format_overdue_alert` |
 | `<b>ثبت شد</b>` | Short edited confirmation, keyboard removed | `format_resolved`, `format_task_confirmation` |
 | `<b>گزارش {period}</b>` | Totals first, per-person detail in one expandable blockquote | `report.format_period_report` |
 
@@ -238,11 +239,14 @@ onto this list.
 ```
 <b>پاسخ لازم</b>
 
-حامد (برای غزل)، اجرای سه لوگو چه شد؟
+حامد، از غزل بپرس: اجرای سه لوگو چه شد؟
 موعد ۷ شهریور، ۵ روز عقب‌افتاده
 ```
-Buttons (one row, labels are answers to *this* question):
-`فرستادم` | `هنوز نه` | `فردا می‌فرستم`
+Chase-via lives in the **question**, not a fourth type label. Meta is
+absolute by Berlin calendar day: overdue keeps «N روز عقب‌افتاده»; due
+today is «موعد امروز» (after ~16:00 Berlin: «موعد امروز، هنوز مانده»);
+tomorrow is «موعد فردا» — never «۰ روز». Buttons (one row, labels are
+answers to *this* question): `فرستادم` | `هنوز نه` | `فردا می‌فرستم`
 
 ### Resolved edit (`format_resolved`) — what the card above becomes on tap
 
@@ -282,7 +286,38 @@ Keyboard gone. Same message — this is an edit, not a reply.
 Totals are the subject line; the per-person breakdown is one expandable
 blockquote, not five separate quoted cards.
 
-## 9. Where this lives — don't build a keyboard anywhere else
+## 9. Urgency bands (`charbot.jobs.urgency`)
+
+Three absolute labels by Europe/Berlin calendar day — never rename due-today
+to overdue until the day rolls, and never invent «در حال دیر شدن» as a type.
+Late-afternoon pressure is a **meta** line (`موعد امروز، هنوز مانده`) plus
+cadence, not a new band.
+
+| Label | Rule | List | Active card |
+|---|---|---|---|
+| عقب‌افتاده | `due_date < today` | intro + one message per person | yes (oldest first) |
+| موعد امروز | `due_date == today` | intro + one message per person | yes (after overdue) |
+| موعد فردا | `due_date == tomorrow` | intro + one message per person | no (heads-up only) |
+
+Send order: overdue → due today → due tomorrow. Empty bands send nothing.
+Unowned open tasks with a due in a band still appear under بدون مسئول.
+No due date → not in this job.
+
+**Cards:** prefer one person-scoped list per non-empty band, then at most
+**one** active card in flight. Escalate by resolving then sending the next
+queued card — do not stack identical digests or three cards at once. Within
+a band, finish one person's items before jumping (`order_tasks_for_cards`).
+Ghazal cards address Hamed in the question; the bold type line stays one of
+the three labels above.
+
+**Don't:** color-code urgency; urgency icons per line; bury overdue in an
+expandable; merge bands into one «فوری» mega-digest.
+
+**Cadence (routines, weekday Berlin working hours):** overdue+today at
+~10:00, 13:30, 16:30, 18:30; tomorrow heads-up once with the 16:30 or 18:30
+run. See [ARCHITECTURE.md](ARCHITECTURE.md) §10.
+
+## 10. Where this lives — don't build a keyboard anywhere else
 
 **`charbot/formatting.py`** owns every rendered text shape: cards, lists,
 digests, active-card text, resolved-edit text, alerts, and the shared
@@ -299,7 +334,7 @@ or wire callback data themselves. If you're tempted to build a one-off
 keyboard inline in a handler, that's the signal to add a function to
 `buttons.py` instead.
 
-## 10. Checklist: adding a new message type
+## 11. Checklist: adding a new message type
 
 1. **Name it.** Pick the bold first line. Does it fit an existing shape
    (section 4)? If not, is a new shape truly warranted, or is this a
@@ -335,6 +370,6 @@ Cross-references: [ARCHITECTURE.md](ARCHITECTURE.md) for the runtime and
 data model this presentation layer sits on top of;
 [FOR-MANAGERS.md](FOR-MANAGERS.md) for the non-technical picture.
 
-## 8. Scheduled-message invariant
+## 12. Scheduled-message invariant
 
-Morning, follow-up, inbox, and weekly-report entrypoints live under `charbot.jobs`. They use the same formatting/report/buttons modules as live replies; no scheduled path may invent a second text or keyboard layout.
+Morning, urgency, follow-up, inbox, and weekly-report entrypoints live under `charbot.jobs`. They use the same formatting/report/buttons modules as live replies; no scheduled path may invent a second text or keyboard layout. Urgency CLI defaults to `--dry-run`.

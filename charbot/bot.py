@@ -26,7 +26,6 @@ from charbot.buttons import (
     choice_means_changed,
     choice_means_done,
     choice_means_wait,
-    followup_question,
     parse_callback_data,
     question_buttons,
     task_pick_buttons,
@@ -1728,9 +1727,9 @@ def _save_followup_queue(store: TaskStore, chat_id: int, ids: list[int]) -> None
 
 
 def _followup_ask_text(task: Task) -> str:
-    title = html_escape(task.title or "")
-    owner = followup_addressee_fa(task.assignee_key)
-    return followup_question(title, owner)
+    from charbot.jobs.followup import ask_for_task
+
+    return ask_for_task(task)
 
 
 def _followup_markup(task: Task) -> InlineKeyboardMarkup | None:

@@ -195,11 +195,30 @@ Weekday inbox / morning / afternoon / Friday report. They may read Neon. They mu
 
 ## 10. Scheduled jobs
 
-The external scheduler invokes the package entrypoints (from `/workspace/charbot-app` with the project environment):
+The external scheduler invokes the package entrypoints (from `/workspace/charbot-app` with the project environment; prefer `TZ=Europe/Berlin` so `date.today()` matches the Berlin calendar day):
 
 - Morning plan: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.standup`
+- Urgency follow-up: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.urgency` (default `--dry-run`; pass `--no-dry-run` only for a live send)
 - Afternoon follow-up: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.followup`
 - Inbox sweep: `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.inbox`
 - Weekly report (Friday noon Berlin): `PYTHONPATH=/workspace/charbot-app .venv/bin/python -m charbot.jobs.weekly_report`
+
+### Urgency job (`charbot.jobs.urgency`)
+
+Separate surface from the general afternoon follow-up. Three absolute bands by Berlin calendar day (`today` injectable for tests):
+
+| Mode | Label | Rule | Active card? |
+|---|---|---|---|
+| `overdue` | عقب‌افتاده | `due_date < today` | yes |
+| `due_today` | موعد امروز | `due_date == today` | yes |
+| `due_tomorrow` | موعد فردا | `due_date == tomorrow` | list only |
+
+Per non-empty band: intro (`N کار برای M نفر`) then one read-only person message via `format_person_list_messages`. Bands are never merged into one «فوری» digest. After lists: at most **one** active card in flight (oldest overdue person-first, then due today); remainder shares `followup_queue` with `charbot.jobs.followup`. Ghazal cards address Hamed in the question (`حامد، از غزل بپرس: …`). CLI: `--modes overdue,due_today` / `CHARBOT_URGENCY_MODES`, `--max-cards`, `--today YYYY-MM-DD`. Default is dry-run (prints HTML); never print secrets.
+
+**Recommended weekday Berlin cadence** (document for Grok routines — do not rewrite routines in this change):
+
+- overdue (+ due today): ~10:00, 13:30, 16:30, 18:30
+- tomorrow heads-up: once with the 16:30 or 18:30 run (`--modes` including `due_tomorrow`)
+- Quiet hours: weekday working hours only
 
 Every scheduled outbound message is rendered by `charbot.formatting`, `charbot.report`, and `charbot.buttons`, the same presentation layer used by live replies. Jobs use `TaskStore` for Neon/SQLite persistence and never call Telegram `getUpdates`.
