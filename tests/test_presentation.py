@@ -212,7 +212,7 @@ async def test_followup_bursts_when_few_distinct_people(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "FOLLOWUP_SEND_DELAY", 0)
     store = _store(tmp_path)
     store.create_task(
-        group_id=GROUP, title="کار غزل", assignee_key="ghazal", due_date=date(2026, 8, 29)
+        group_id=GROUP, title="کار سامان", assignee_key="saman", due_date=date(2026, 8, 29)
     )
     store.create_task(
         group_id=GROUP, title="کار حامد", assignee_key="hamed", due_date=date(2026, 8, 30)
@@ -226,6 +226,28 @@ async def test_followup_bursts_when_few_distinct_people(tmp_path, monkeypatch):
     for call in fake_bot.send_message.call_args_list[-2:]:
         assert call.kwargs["text"].startswith("<b>پاسخ لازم</b>")
     assert store.get_kv(bot._followup_queue_key(GROUP)) in (None, "", "[]")
+
+
+@pytest.mark.asyncio
+async def test_followup_does_not_burst_two_ghazal_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "FOLLOWUP_SEND_DELAY", 0)
+    store = _store(tmp_path)
+    store.create_task(
+        group_id=GROUP, title="کار غزل یک", assignee_key="ghazal", due_date=date(2026, 8, 29)
+    )
+    store.create_task(
+        group_id=GROUP, title="کار غزل دو", assignee_key="ghazal", due_date=date(2026, 8, 30)
+    )
+    fake_bot = MagicMock(send_message=AsyncMock())
+
+    await bot._run_followup_for_group(fake_bot, store, GROUP)
+
+    # intro + 1 person (غزل) + 1 active card; second card queued
+    assert fake_bot.send_message.call_count == 3
+    card_call = fake_bot.send_message.call_args_list[-1]
+    assert card_call.kwargs["text"].startswith("<b>پاسخ لازم</b>")
+    queued = json.loads(store.get_kv(bot._followup_queue_key(GROUP)))
+    assert len(queued) == 1
 
 
 @pytest.mark.asyncio

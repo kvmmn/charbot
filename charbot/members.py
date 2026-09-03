@@ -76,3 +76,33 @@ def member_display_fa(key: str | None) -> str:
     if not key:
         return "نامشخص"
     return FA_DISPLAY.get(key, member_display(key))
+
+
+# People who are not in X-Chaharsotoon: tasks keep their assignee, but
+# follow-up questions and @mentions go through another member.
+FOLLOWUP_VIA: dict[str, str] = {
+    "ghazal": "hamed",
+}
+
+
+def chase_via(assignee_key: str | None) -> str | None:
+    """Who to ping for a follow-up. Assignee on the task does not change."""
+    if not assignee_key:
+        return None
+    return FOLLOWUP_VIA.get(assignee_key, assignee_key)
+
+
+def followup_addressee_fa(assignee_key: str | None) -> str | None:
+    """Persian name used to open an active-card question.
+
+    For Ghazal (not in the group): «حامد (برای غزل)» so Hamed is asked and
+    the real owner stays visible.
+    """
+    if not assignee_key:
+        return None
+    via = chase_via(assignee_key)
+    if via is None:
+        return None
+    if via != assignee_key:
+        return f"{member_display_fa(via)} (برای {member_display_fa(assignee_key)})"
+    return member_display_fa(via)

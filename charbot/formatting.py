@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from html import escape
 
-from charbot.members import member_display_fa
+from charbot.members import chase_via, member_display_fa
 from charbot.store import Task
 
 # ---------------------------------------------------------------------------
@@ -285,6 +285,9 @@ def _person_message(
     name = unassigned_label if key is None else escape(member_display_fa(key))
     ring = person_mark(key)
     head = f"<b>{ring} {name} — {to_fa_digits(len(group_tasks))} کار</b>"
+    via = chase_via(key)
+    if key and via and via != key:
+        head += f"\nپیگیری از {escape(member_display_fa(via))}"
     lines = [
         f"{to_fa_digits(i + 1)}. {escape((t.title or '').strip() or 'بدون عنوان')}"
         f" — {_due_short(t.due_date, today)}"

@@ -12,7 +12,7 @@ from charbot.formatting import (
     format_person_list_messages,
     format_task_question,
 )
-from charbot.members import member_display_fa
+from charbot.members import chase_via, followup_addressee_fa
 from charbot.store import Task, TaskStore
 
 from .common import JobMessage, Sender, deliver
@@ -24,7 +24,7 @@ SEND_DELAY = 0.6
 
 def active_message(task: Task, chat_id: int, *, today: date | None = None) -> JobMessage:
     ask = followup_question(
-        task.title or "", member_display_fa(task.assignee_key) if task.assignee_key else None
+        task.title or "", followup_addressee_fa(task.assignee_key)
     )
     return JobMessage(
         chat_id,
@@ -44,7 +44,7 @@ def _dedupe(tasks: list[Task]) -> list[Task]:
 
 
 def _burst_eligible(tasks: list[Task], limit: int) -> bool:
-    named = [task.assignee_key for task in tasks if task.assignee_key]
+    named = [chase_via(task.assignee_key) for task in tasks if task.assignee_key]
     return 1 <= len(tasks) <= limit and len(named) == len(set(named)) and len(named) == len(tasks)
 
 

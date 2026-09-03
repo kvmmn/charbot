@@ -57,7 +57,9 @@ from charbot.jobs import standup as scheduled_standup
 from charbot.jobs.common import JobMessage
 from charbot.members import (
     MEMBER_BY_KEY,
+    chase_via,
     find_member_in_text,
+    followup_addressee_fa,
     member_display,
     member_display_fa,
     resolve_member_name,
@@ -703,6 +705,12 @@ def _mention_for(store: TaskStore, key: str) -> str:
         if mapping.member_key == key and mapping.username:
             return f"@{mapping.username}"
     return member_display(key)
+
+
+def chase_mention_for(store: TaskStore, assignee_key: str) -> str:
+    """@mention the chase contact for follow-up, not the assignee if they are absent."""
+    via = chase_via(assignee_key) or assignee_key
+    return _mention_for(store, via)
 
 
 def _role_saved(store: TaskStore, key: str) -> bool:
@@ -1669,7 +1677,7 @@ def _burst_eligible(tasks: list[Task]) -> bool:
     """<=3 items, each for a different named person -> safe to send together."""
     if not (1 <= len(tasks) <= FOLLOWUP_BURST_LIMIT):
         return False
-    named = [t.assignee_key for t in tasks if t.assignee_key]
+    named = [chase_via(t.assignee_key) for t in tasks if t.assignee_key]
     return len(named) == len(set(named))
 
 
@@ -1696,7 +1704,7 @@ def _save_followup_queue(store: TaskStore, chat_id: int, ids: list[int]) -> None
 
 def _followup_ask_text(task: Task) -> str:
     title = html_escape(task.title or "")
-    owner = member_display_fa(task.assignee_key) if task.assignee_key else None
+    owner = followup_addressee_fa(task.assignee_key)
     return followup_question(title, owner)
 
 
@@ -1876,10 +1884,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # that is the only accurate source for "what they chose".
         tapped_label = _tapped_label(query) or "پاسخ داده شد"
         task = store.get_task(task_id, chat_id)
-        if task and task.assignee_key:
-            who = member_display_fa(task.assignee_key)
-        elif tapper_key:
+        if tapper_key:
             who = member_display_fa(tapper_key)
+        elif task and task.assignee_key:
+            who = followup_addressee_fa(task.assignee_key) or "کسی"
         else:
             who = "کسی"
 

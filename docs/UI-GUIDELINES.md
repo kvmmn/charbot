@@ -138,6 +138,7 @@ substitute for the name. Rules:
 - Status is a **word** (`عقب‌افتاده` / `امروز` / `بدون موعد` / `پیش‌رو`),
   never a second colored circle competing with the person ring for
   attention.
+- Ghazal is not in X-Chaharsotoon; chase via Hamed (follow-up questions, @mentions, active cards). `assignee_key` stays `ghazal`.
 
 ## 6. Persian digits, Jalali dates, no "·"
 
@@ -190,6 +191,7 @@ here only so the example is readable in one place:
 
 ```
 <b>🟣 غزل — ۲ کار</b>
+پیگیری از حامد
 ۱. اجرای سه لوگو — موعد ۷ شهریور
 ۲. قیمت فیلم‌بردار اینستاگرام — موعد ۱۰ شهریور
 ```
@@ -236,7 +238,7 @@ onto this list.
 ```
 <b>پاسخ لازم</b>
 
-غزل، اجرای سه لوگو چه شد؟
+حامد (برای غزل)، اجرای سه لوگو چه شد؟
 موعد ۷ شهریور، ۵ روز عقب‌افتاده
 ```
 Buttons (one row, labels are answers to *this* question):
@@ -247,7 +249,7 @@ Buttons (one row, labels are answers to *this* question):
 ```
 <b>ثبت شد</b>
 
-غزل: فرستادم
+حامد: فرستادم
 پاسخ امروز، ۱۷:۲۰
 ```
 Keyboard gone. Same message — this is an edit, not a reply.

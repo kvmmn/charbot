@@ -300,10 +300,12 @@ def test_person_list_messages_are_intro_plus_one_per_person():
     assert "بلیط پرواز مشهد" not in ghazal
     assert "جلسه سه‌شنبه" not in ghazal
     assert ghazal.count("🟣 غزل") == 1
+    assert "پیگیری از حامد" in ghazal
 
-    hamed = next(m for m in msgs[1:] if "حامد" in m)
+    hamed = next(m for m in msgs[1:] if "🟢 حامد" in m)
     assert "صورتجلسه هیئت مدیره" in hamed
     assert "اجرای سه لوگو" not in hamed
+    assert "پیگیری از" not in hamed
 
     assert "غزل" in msgs[1]  # most overdue person first
 
@@ -375,3 +377,60 @@ def test_overdue_alert_shape():
     assert "اجرای سه لوگو" in text
     assert "تحویل جمعه عقب می‌افتد" in text
     assert "همین امروز بفرست" in text
+
+
+# ---------------------------------------------------------------------------
+# Chase-via: Ghazal is not in the group; lists stay under her, chase via Hamed
+# ---------------------------------------------------------------------------
+
+
+def test_ghazal_person_list_notes_chase_via_hamed():
+    t = _task(assignee_key="ghazal", due_date=date(2026, 8, 29), title="اجرای سه لوگو")
+    msgs = format_person_list_messages([t], header="کارهای عقب‌افتاده", today=TODAY)
+    assert len(msgs) == 2
+    person = msgs[1]
+    assert person.startswith("<b>🟣 غزل")
+    lines = person.split("\n")
+    assert lines[0].startswith("<b>🟣 غزل")
+    assert lines[1] == "پیگیری از حامد"
+    assert "اجرای سه لوگو" in person
+
+
+def test_saman_person_list_has_no_chase_via_line():
+    t = _task(assignee_key="saman", due_date=date(2026, 9, 1), title="بلیط پرواز مشهد")
+    msgs = format_person_list_messages([t], header="کارهای سامان", today=TODAY)
+    assert "پیگیری از" not in msgs[1]
+
+
+def test_followup_ask_text_for_ghazal_addresses_hamed():
+    from charbot.bot import _followup_ask_text
+
+    t = _task(assignee_key="ghazal", title="اجرای سه لوگو")
+    ask = _followup_ask_text(t)
+    assert "حامد" in ask
+    assert "غزل" in ask
+
+
+def test_active_message_for_ghazal_addresses_hamed():
+    from charbot.jobs.followup import active_message
+
+    t = _task(assignee_key="ghazal", due_date=date(2026, 8, 29), title="اجرای سه لوگو")
+    msg = active_message(t, chat_id=-1, today=TODAY)
+    assert "حامد" in msg.text
+    assert "غزل" in msg.text
+
+
+def test_two_ghazal_tasks_are_not_burst_eligible():
+    from charbot.bot import _burst_eligible as bot_burst
+    from charbot.jobs.followup import _burst_eligible as job_burst
+
+    a = _task(id=1, assignee_key="ghazal", title="کار یک")
+    b = _task(id=2, assignee_key="ghazal", title="کار دو")
+    assert not bot_burst([a, b])
+    assert not job_burst([a, b], 3)
+    hamed = _task(id=3, assignee_key="hamed", title="کار حامد")
+    assert not bot_burst([a, hamed])
+    assert not job_burst([a, hamed], 3)
+    saman = _task(id=4, assignee_key="saman", title="کار سامان")
+    assert bot_burst([hamed, saman])
+    assert job_burst([hamed, saman], 3)
