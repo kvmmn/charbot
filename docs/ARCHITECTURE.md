@@ -2,7 +2,7 @@
 
 charbot is a reusable Telegram coordinator for a small team (**Example Org** by default). A typical production setup is a single Fly.io machine (e.g. Frankfurt) that receives Telegram webhooks and stores everything in Neon Postgres.
 
-This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Workflow image: [charbot-workflow.png](charbot-workflow.png). Telegram presentation rules (cards, lists, digests, keyboards): [UI-GUIDELINES.md](UI-GUIDELINES.md).
+This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Architecture graphic (khaki): [charbot-architecture.png](charbot-architecture.png) / [charbot-workflow.png](charbot-workflow.png). Telegram presentation rules (cards, lists, digests, keyboards): [UI-GUIDELINES.md](UI-GUIDELINES.md).
 
 ## 1. High level
 
