@@ -1,6 +1,6 @@
 # Architecture
 
-charbot is the Telegram coordinator for **چهارستون** (Chaharsotoon). Production is a single Fly.io machine in Frankfurt that receives Telegram webhooks and stores everything in Neon Postgres.
+charbot is a reusable Telegram coordinator for a small team (**Example Org** by default). A typical production setup is a single Fly.io machine (e.g. Frankfurt) that receives Telegram webhooks and stores everything in Neon Postgres.
 
 This document is the technical map. Keep it in sync with the code on every change. Manager-facing picture: [FOR-MANAGERS.md](FOR-MANAGERS.md). Workflow image: [charbot-workflow.png](charbot-workflow.png). Telegram presentation rules (cards, lists, digests, keyboards): [UI-GUIDELINES.md](UI-GUIDELINES.md).
 
@@ -8,7 +8,7 @@ This document is the technical map. Keep it in sync with the code on every chang
 
 ```mermaid
 flowchart LR
-  G[X-Chaharsotoon<br/>text · voice · photos · taps] -->|HTTPS webhook| F["Fly.io fra<br/>chaharsotoon-charbot"]
+  G[Telegram group<br/>text · voice · photos · taps] -->|HTTPS webhook| F["Fly.io<br/>your-charbot-app"]
   F --> I[Speech-act gate]
   I -->|list / role / report| R[Reply in group]
   I -->|learn / اوکی؟| G[Store glossary + ack]
@@ -27,14 +27,14 @@ flowchart LR
 
 | Piece | Value |
 |---|---|
-| App | `chaharsotoon-charbot` (`fly.toml`) |
+| App | placeholder `your-charbot-app` in `fly.toml`; deploy with `--app <real>` |
 | Region | `fra` (Frankfurt) |
 | Mode | `BOT_MODE=webhook` |
 | Process | `min_machines_running = 1`, `auto_stop_machines = false` |
 | Health | `GET /health` → `{"status":"ok","service":"charbot"}` |
 | Webhook | `POST /telegram/webhook` |
 | Entry | `charbot.main` (FastAPI + python-telegram-bot) |
-| Group | X-Chaharsotoon, gated by `TELEGRAM_GROUP_ID` |
+| Group | Configured group(s), gated by `TELEGRAM_GROUP_ID` |
 
 Startup registers the webhook and **must not** drop pending updates. Polling (`python -m charbot.main --mode polling`) is local/dev only. Never call Telegram `getUpdates` against the production token while the webhook is live.
 
@@ -136,7 +136,7 @@ Preference order (`charbot/voice.py` `asr_backends()`):
 | 2 | same key | same | `openai/whisper-large-v3` | Cheap multilingual fallback (~$0.0005/min via OpenRouter) |
 | 3 | `OPENAI_API_KEY` | `https://api.openai.com/v1/audio/transcriptions` | `gpt-4o-mini-transcribe` | Last resort on the existing OpenAI key |
 
-Always send `language=fa`. Whisper-family calls also send a glossary prompt (چهارستون، شی/SHEY, **JTI/جی‌تی‌آی**, names, airports). `GTI` is an alias of JTI, not a name. Deepgram rejects that prompt field, so it is omitted for Nova-3.
+Always send `language=fa`. Whisper-family calls also send a glossary prompt (org/project glossary defaults, **JTI/جی‌تی‌آی**, names, airports). `GTI` is an alias of JTI, not a name. Deepgram rejects that prompt field, so it is omitted for Nova-3.
 
 Override first OpenRouter slug with `CHARBOT_ASR_MODEL` only when it contains `/` (full OpenRouter id).
 
@@ -151,13 +151,13 @@ Schemas (`schema.sql`):
 | Schema | Contents |
 |---|---|
 | `identity` | organizations, groups, people, roles, memories, events |
-| `work` | projects (SHEY), tasks, assignees, task events (`completed_at` on done) |
+| `work` | projects (default demo project), tasks, assignees, task events (`completed_at` on done) |
 | `comms` | messages, message_media, lessons |
 | `ops` | settings, migrations |
 
 `search_path`: `identity, work, comms, ops, public`. Assignee is `work.task_assignees` + `identity.people.slug`, not a column on `tasks`.
 
-Period reports (`charbot/report.py`) count per person: done / still open / overdue, from assignee + due + `completed_at`, Berlin timezone. Weekly digest: Friday 12:00 Europe/Berlin.
+Period reports (`charbot/report.py`) count per person: done / still open / overdue, from assignee + due + `completed_at`, Europe/Berlin timezone. Weekly digest: Friday 12:00 Europe/Berlin.
 
 ## 7. UX
 
@@ -174,7 +174,21 @@ Period reports (`charbot/report.py`) count per person: done / still open / overd
 - Questions to humans: inline buttons generated from **that** question, not a frozen global menu. Tap completes; free text is for corrections.
 - Hamed and Saman roles are stored; never re-ask.
 
-## 8. Secrets (never git)
+## 8. Org / identity env (public defaults)
+
+| Name | Default | Notes |
+|---|---|---|
+| `CHARBOT_ORG_SLUG` | `example-org` | Must match existing Neon org slug in production |
+| `CHARBOT_ORG_NAME` | `Example Org` | Display / seed name |
+| `CHARBOT_GROUP_TITLE` | `Example Board` | Group seed title |
+| `CHARBOT_GROUP_CHAT_ID` | _(empty)_ | Optional; when set, Postgres seed/upsert uses this chat id |
+| `CHARBOT_PROJECT_SLUG` / `NAME` | `demo-project` / `Demo Project` | Default project seed |
+| `CHARBOT_TG_USERNAMES` | _(empty)_ | `key:username,…` for @mentions fallback |
+| `CHARBOT_ROLE_*` / `CHARBOT_NOTE_GHAZAL` | generic English | Optional role/note seeds |
+
+Changing the default slug does **not** wipe Neon rows; the app simply ensures/upserts under the configured slug. Production must set the historical slug to keep live data in view.
+
+## 9. Secrets (never git)
 
 | Name | Use |
 |---|---|
@@ -189,11 +203,11 @@ Period reports (`charbot/report.py`) count per person: done / still open / overd
 
 `.dockerignore` excludes `.venv`, `.git`, `.env`, `data/`.
 
-## 9. Backup (Grok routines)
+## 10. Backup (Grok routines)
 
 Weekday inbox / morning / afternoon / Friday report. They may read Neon. They must **never** call Telegram `getUpdates`.
 
-## 10. Scheduled jobs
+## 11. Scheduled jobs
 
 The external scheduler invokes the package entrypoints (from `/workspace/charbot-app` with the project environment; prefer `TZ=Europe/Berlin` so `date.today()` matches the Berlin calendar day):
 

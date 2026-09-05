@@ -17,15 +17,15 @@ _DEFAULT = (
     },
     {
         "kind": "company",
-        "en": "Chaharsotoon",
-        "fa": "چهارستون",
-        "aliases": ["چارسوتون", "4S"],
+        "en": "Example Org",
+        "fa": "سازمان نمونه",
+        "aliases": ["ExampleOrg"],
     },
     {
         "kind": "brand",
-        "en": "SHEY",
-        "fa": "شی",
-        "aliases": ["Shey", "شیء"],
+        "en": "Demo Project",
+        "fa": "پروژه نمونه",
+        "aliases": ["Demo"],
     },
 )
 
@@ -137,8 +137,8 @@ def apply_text(text: str, entries: list[GlossaryEntry]) -> str:
 
 def asr_prompt(entries: list[GlossaryEntry] | None = None) -> str:
     names = [
-        "چهارستون",
-        "شی SHEY",
+        "سازمان نمونه",
+        "پروژه نمونه",
         "مشهد",
         "فرجی",
         "فرهمند",

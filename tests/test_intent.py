@@ -27,7 +27,7 @@ from charbot.store import TaskStore
 from charbot.understand import extract_task
 
 TODAY = date(2026, 8, 31)
-GROUP = -1002781646107
+GROUP = -1001111111111
 
 
 @pytest.mark.parametrize(
@@ -113,7 +113,7 @@ def test_interpret_list_questions_do_not_insert(tmp_path: Path) -> None:
     store.upsert_user_mapping(
         telegram_user_id=42,
         member_key="kawe",
-        username="kvmmn",
+        username="kawe_tg",
         display_name="Kawe",
     )
     for text in (
@@ -140,7 +140,7 @@ def test_interpret_still_creates_imperative(tmp_path: Path) -> None:
     store.upsert_user_mapping(
         telegram_user_id=42,
         member_key="kawe",
-        username="kvmmn",
+        username="kawe_tg",
         display_name="Kawe",
     )
     result = interpret_work_or_followup(
@@ -197,7 +197,7 @@ def _kawe_store(tmp_path: Path) -> TaskStore:
     store.upsert_user_mapping(
         telegram_user_id=42,
         member_key="kawe",
-        username="kvmmn",
+        username="kawe_tg",
         display_name="Kawe",
     )
     return store
@@ -352,7 +352,7 @@ def test_done_report_no_match_never_creates(tmp_path: Path) -> None:
 def _board_store(tmp_path: Path) -> TaskStore:
     store = TaskStore(tmp_path / "chase-done.db")
     store.upsert_user_mapping(
-        telegram_user_id=42, member_key="kawe", username="kvmmn", display_name="Kawe"
+        telegram_user_id=42, member_key="kawe", username="kawe_tg", display_name="Kawe"
     )
     store.upsert_user_mapping(
         telegram_user_id=2, member_key="hamed", username="hamed", display_name="Hamed"

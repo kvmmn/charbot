@@ -8,7 +8,7 @@ from charbot.agent import ALLOWED_TOOLS, run_colleague
 from charbot.intent import SpeechActKind, classify_speech_act
 from charbot.store import TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 JTI = "اسم کارفرما به انگلیسی JTI و به فارسی جی‌تی‌آی هست. درست استفاده‌ش کن. اوکی؟"
 
 

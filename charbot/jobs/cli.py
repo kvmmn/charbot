@@ -31,7 +31,12 @@ class TelegramSender:
 async def run_cli(job: Callable, *, sends: bool = True) -> None:
     settings = get_settings()
     store = store_from_settings(settings)
-    groups = settings.allowed_groups() or {-1002781646107}
+    groups = settings.allowed_groups()
+    if not groups:
+        raise SystemExit(
+            "No Telegram groups configured. "
+            "Set TELEGRAM_GROUP_ID or TELEGRAM_ALLOWED_GROUP_IDS before sending."
+        )
     sender = TelegramSender(settings.require_token()) if sends else None
     bot = sender.bot if sender else None
     if bot:

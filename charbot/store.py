@@ -21,17 +21,35 @@ from psycopg.types.json import Jsonb
 from charbot.members import BOARD_MEMBERS, MEMBER_BY_KEY
 
 SCHEMA_SQL_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
-ORG_SLUG = "chaharsotoon"
-ORG_NAME = "\u0686\u0647\u0627\u0631\u0633\u062a\u0648\u0646"
-KNOWN_GROUP_CHAT_ID = -1002781646107
-KNOWN_GROUP_TITLE = "X-Chaharsotoon"
-SHEY_SLUG = "shey"
-SHEY_NAME = "SHEY"
-HAMED_ROLE_SUMMARY = "مدیرعامل، سرپرست طراحی، طراح"
-KAWE_ROLE_SUMMARY = (
-    "رئیس هیئت مدیره؛ remote برلین؛ هماهنگی، مشاوره، AM/client، PMO، tech/AI"
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.environ.get(name, default)
+    value = (value or "").strip()
+    return value if value else default
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
+# Public defaults are generic. Production must set CHARBOT_ORG_* / GROUP / PROJECT
+# (and role seeds) via env so Neon upserts keep matching existing rows.
+ORG_SLUG = _env_str("CHARBOT_ORG_SLUG", "example-org")
+ORG_NAME = _env_str("CHARBOT_ORG_NAME", "Example Org")
+KNOWN_GROUP_TITLE = _env_str("CHARBOT_GROUP_TITLE", "Example Board")
+KNOWN_GROUP_CHAT_ID = _env_optional_int("CHARBOT_GROUP_CHAT_ID")
+SHEY_SLUG = _env_str("CHARBOT_PROJECT_SLUG", "demo-project")
+SHEY_NAME = _env_str("CHARBOT_PROJECT_NAME", "Demo Project")
+HAMED_ROLE_SUMMARY = _env_str("CHARBOT_ROLE_HAMED", "Lead; design")
+KAWE_ROLE_SUMMARY = _env_str(
+    "CHARBOT_ROLE_KAWE",
+    "Chair; coordination and tech",
 )
-GHAZAL_NOTE = "کارمند بازاریابی، برندینگ، طراحی و اجرا"
+GHAZAL_NOTE = _env_str("CHARBOT_NOTE_GHAZAL", "Marketing, branding, design")
 SEARCH_PATH = "identity, work, comms, ops, public"
 SEARCH_PATH_OPTIONS = "identity,work,comms,ops,public"
 
@@ -321,9 +339,22 @@ def parse_role_titles(value: str) -> list[str]:
     return [text]
 
 
+def _project_match_terms() -> tuple[str, ...]:
+    """Keywords that auto-attach a task to CHARBOT_PROJECT_*. Comma-separated env."""
+    raw = (os.environ.get("CHARBOT_PROJECT_MATCH") or "").strip()
+    if raw:
+        return tuple(t.strip().lower() for t in raw.split(",") if t.strip())
+    # Generic demo: match the configured project name/slug only
+    return tuple(
+        t
+        for t in (SHEY_SLUG.lower(), SHEY_NAME.lower())
+        if t and t not in {"demo-project", "demo project"}
+    )
+
+
 def _looks_like_shey(title: str | None, description: str | None) -> bool:
-    blob = f"{title or ''} {description or ''}"
-    return "\u0634\u06cc" in blob or "shey" in blob.lower()
+    blob = f"{title or ''} {description or ''}".lower()
+    return any(term in blob for term in _project_match_terms())
 
 
 def _row_to_task(row: Any) -> Task:
@@ -602,16 +633,17 @@ class TaskStore:
             """,
             (ORG_SLUG, ORG_NAME),
         )
-        conn.execute(
-            """
-            INSERT INTO identity.groups (organization_id, telegram_chat_id, title)
-            SELECT o.id, ?, ?
-            FROM identity.organizations o
-            WHERE o.slug = ?
-            ON CONFLICT (telegram_chat_id) DO UPDATE SET title = EXCLUDED.title
-            """,
-            (KNOWN_GROUP_CHAT_ID, KNOWN_GROUP_TITLE, ORG_SLUG),
-        )
+        if KNOWN_GROUP_CHAT_ID is not None:
+            conn.execute(
+                """
+                INSERT INTO identity.groups (organization_id, telegram_chat_id, title)
+                SELECT o.id, ?, ?
+                FROM identity.organizations o
+                WHERE o.slug = ?
+                ON CONFLICT (telegram_chat_id) DO UPDATE SET title = EXCLUDED.title
+                """,
+                (KNOWN_GROUP_CHAT_ID, KNOWN_GROUP_TITLE, ORG_SLUG),
+            )
         conn.execute(
             """
             INSERT INTO work.projects (organization_id, slug, name, status)
@@ -904,7 +936,7 @@ class TaskStore:
                   AND s.group_id IS NOT DISTINCT FROM g.id
               )
             """,
-            (ORG_SLUG, KNOWN_GROUP_CHAT_ID),
+            (ORG_SLUG, KNOWN_GROUP_CHAT_ID if KNOWN_GROUP_CHAT_ID is not None else 0),
         )
 
     def _verify_postgres_migration(self, conn: _AdaptConn) -> None:
@@ -968,7 +1000,7 @@ class TaskStore:
 
     def _seed_all(self, conn: _AdaptConn) -> None:
         self._ensure_org(conn)
-        if self._dsn:
+        if self._dsn and KNOWN_GROUP_CHAT_ID is not None:
             self._ensure_group(conn, KNOWN_GROUP_CHAT_ID, KNOWN_GROUP_TITLE)
         self._ensure_project(conn, SHEY_SLUG, SHEY_NAME)
         for member in BOARD_MEMBERS:
@@ -1274,15 +1306,27 @@ class TaskStore:
         return str(value)
 
     def _default_group_id(self, conn: Any) -> str | None:
-        row = conn.execute(
-            """
-            SELECT id FROM groups
-            WHERE organization_id = ?
-            ORDER BY CASE WHEN telegram_chat_id = ? THEN 0 ELSE 1 END, created_at
-            LIMIT 1
-            """,
-            (self._ensure_org(conn), KNOWN_GROUP_CHAT_ID),
-        ).fetchone()
+        org_id = self._ensure_org(conn)
+        if KNOWN_GROUP_CHAT_ID is not None:
+            row = conn.execute(
+                """
+                SELECT id FROM groups
+                WHERE organization_id = ?
+                ORDER BY CASE WHEN telegram_chat_id = ? THEN 0 ELSE 1 END, created_at
+                LIMIT 1
+                """,
+                (org_id, KNOWN_GROUP_CHAT_ID),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id FROM groups
+                WHERE organization_id = ?
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (org_id,),
+            ).fetchone()
         return None if not row else str(row["id"])
 
     def ensure_person(

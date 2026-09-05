@@ -14,6 +14,21 @@ class BotMode(StrEnum):
     WEBHOOK = "webhook"
 
 
+def parse_tg_usernames(raw: str) -> dict[str, str]:
+    """Parse CHARBOT_TG_USERNAMES: key:username,key:username."""
+    out: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        key, username = part.split(":", 1)
+        key = key.strip()
+        username = username.strip().lstrip("@")
+        if key and username:
+            out[key] = username
+    return out
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -34,6 +49,8 @@ class Settings(BaseSettings):
     followup_interval_hours: int = Field(default=24, alias="FOLLOWUP_INTERVAL_HOURS")
     followup_enabled: bool = Field(default=True, alias="FOLLOWUP_ENABLED")
 
+    charbot_tg_usernames: str = Field(default="", alias="CHARBOT_TG_USERNAMES")
+
     def allowed_groups(self) -> set[int]:
         ids: set[int] = set()
         if self.telegram_group_id is not None:
@@ -45,6 +62,9 @@ class Settings(BaseSettings):
                     ids.add(int(part))
         return ids
 
+    def tg_usernames(self) -> dict[str, str]:
+        return parse_tg_usernames(self.charbot_tg_usernames)
+
     def require_token(self) -> str:
         if not self.telegram_bot_token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
@@ -53,3 +73,10 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     return Settings()
+
+
+def telegram_username(key: str | None) -> str | None:
+    """Lookup a member key's Telegram @username from CHARBOT_TG_USERNAMES."""
+    if not key:
+        return None
+    return get_settings().tg_usernames().get(key)

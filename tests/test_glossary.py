@@ -15,7 +15,7 @@ from charbot.glossary import (
 from charbot.intent import SpeechActKind, classify_speech_act, may_create_task, must_reply
 from charbot.store import TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 JTI = "اسم کارفرما به انگلیسی JTI و به فارسی جی‌تی‌آی هست. درست استفاده‌ش کن. اوکی؟"
 
 

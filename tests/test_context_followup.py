@@ -13,16 +13,16 @@ from charbot.bot import (
 from charbot.nlp import NLIntent, parse_natural_language
 from charbot.store import TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 TODAY = date(2026, 8, 31)
 DUE = date(2026, 9, 2)
 WORK = (
     "من باید فایل تدوین‌شده قرارداد متعلق به حامد رو بررسی کنم "
     "و اگر نیاز به اصلاح داشت به حامد بگم تا دو روز دیگه"
 )
-MOTAVAJEH = "متوجه شدی؟ @TheCharBot"
+MOTAVAJEH = "متوجه شدی؟ @YourBot"
 SAVE = "بعنوان یه کار قابل پیگیری ذخیره کن. جزییاتش رو بگو بهم (مسئول، زمان، موضوع)"
-HAMED_FOLLOWUP = "الان نقشم و گفتم فهمیدی @TheCharBot"
+HAMED_FOLLOWUP = "الان نقشم و گفتم فهمیدی @YourBot"
 
 
 def _store(tmp_path: Path) -> TaskStore:
@@ -30,14 +30,14 @@ def _store(tmp_path: Path) -> TaskStore:
     store.upsert_user_mapping(
         telegram_user_id=42,
         member_key="kawe",
-        username="kvmmn",
+        username="kawe_tg",
         display_name="Kawe",
     )
     store.upsert_user_mapping(
         telegram_user_id=84184761,
         member_key="hamed",
-        username="Musketeer1985",
-        display_name="Hamed Akhoundi",
+        username="alice_tg",
+        display_name="Hamed",
     )
     store.set_person_role("hamed", "مدیرعامل، سرپرست طراحی، طراح", source="hamed")
     return store
@@ -54,9 +54,9 @@ def _log(
         telegram_update_id=update_id or (10_000 + message_id),
         chat_id=GROUP,
         chat_type="supergroup",
-        chat_title="X-Chaharsotoon",
+        chat_title="Example Board",
         user_id=user_id,
-        username="kvmmn" if user_id == 42 else "Musketeer1985",
+        username="kawe_tg" if user_id == 42 else "alice_tg",
         display_name="Kawe" if user_id == 42 else "Hamed",
         message_id=message_id,
         kind="text",

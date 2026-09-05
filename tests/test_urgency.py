@@ -22,7 +22,7 @@ from charbot.jobs.urgency import (
 )
 from charbot.store import Task, TaskStatus, TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 TODAY = date(2026, 9, 3)
 BERLIN = ZoneInfo("Europe/Berlin")
 

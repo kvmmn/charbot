@@ -88,7 +88,7 @@ def _try_llm(text: str, act: SpeechAct) -> dict | None:
             {
                 "role": "system",
                 "content": (
-                    "You are charbot, a colleague in the چهارستون Telegram group. "
+                    "You are charbot, a colleague in the company Telegram group. "
                     "Reply in short natural Persian. JSON only: "
                     '{"tool":"reply|learn_glossary|ask","reply":"...","en":null,'
                     '"fa":null,"kind":null}. '
@@ -110,7 +110,7 @@ def _try_llm(text: str, act: SpeechAct) -> dict | None:
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + key,
-            "HTTP-Referer": "https://charbot.chaharsotoon",
+            "HTTP-Referer": "https://github.com/kvmmn/charbot",
             "X-Title": "charbot",
         },
     )

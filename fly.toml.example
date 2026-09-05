@@ -1,0 +1,37 @@
+# Example Fly.io config. Copy to fly.toml (or pass --app) for your deployment.
+# Maintainers: fly deploy --remote-only --app <your-real-app> --ha=false
+#
+# Never commit real tokens. Set secrets with:
+#   fly secrets set TELEGRAM_BOT_TOKEN=... DATABASE_URL=... TELEGRAM_GROUP_ID=... \
+#     WEBHOOK_URL=https://<your-app>.fly.dev WEBHOOK_SECRET=... \
+#     CHARBOT_ORG_SLUG=... CHARBOT_ORG_NAME=... CHARBOT_GROUP_TITLE=... \
+#     CHARBOT_GROUP_CHAT_ID=... CHARBOT_PROJECT_SLUG=... CHARBOT_PROJECT_NAME=... \
+#     CHARBOT_TG_USERNAMES=kawe:alice_tg,hamed:bob_tg \
+#     --app <your-real-app>
+
+app = "your-charbot-app"
+primary_region = "fra"
+
+[build]
+
+[env]
+  BOT_MODE = "webhook"
+  PORT = "8081"
+  WEBHOOK_PATH = "/telegram/webhook"
+  HOST = "0.0.0.0"
+  CHARBOT_WHISPER_MODEL = "tiny"
+  CHARBOT_ASR_MODEL = "gpt-4o-mini-transcribe"
+
+[http_service]
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"

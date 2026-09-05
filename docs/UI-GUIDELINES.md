@@ -1,7 +1,7 @@
 # Telegram UI guidelines
 
-This is the design contract for charbot's Telegram surface: the group chat
-**X-Chaharsotoon**. It exists so a new contributor can add or change a
+This is the design contract for charbot's Telegram surface: the configured
+**Example Board** group (or your production group). It exists so a new contributor can add or change a
 message without reading `charbot/bot.py` line by line. If code and this
 document disagree, that's a bug — fix one to match the other in the same
 change.
@@ -139,7 +139,7 @@ substitute for the name. Rules:
 - Status is a **word** (`عقب‌افتاده` / `امروز` / `بدون موعد` / `پیش‌رو`),
   never a second colored circle competing with the person ring for
   attention.
-- Ghazal is not in X-Chaharsotoon; chase via Hamed (follow-up questions, @mentions, active cards). `assignee_key` stays `ghazal`. Completion reports from the chase contact or from Kawe can close the assignee's task.
+- Ghazal is not in the primary group; chase via Hamed (follow-up questions, @mentions, active cards). `assignee_key` stays `ghazal`. Completion reports from the chase contact or from Kawe can close the assignee's task.
 
 ## 6. Persian digits, Jalali dates, no "·"
 

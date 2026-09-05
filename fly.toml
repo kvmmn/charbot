@@ -1,5 +1,5 @@
 # fly.toml — webhook on Fly, Neon as the database
-app = "chaharsotoon-charbot"
+app = "your-charbot-app"
 primary_region = "fra"
 
 [build]

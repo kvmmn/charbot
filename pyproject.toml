@@ -1,7 +1,7 @@
 [project]
 name = "charbot"
 version = "1.0.0"
-description = "Telegram coordinator bot for Chaharsotoon (4S)"
+description = "Reusable Telegram coordinator bot for small teams"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -32,7 +32,7 @@ def test_parse_command_args() -> None:
     assert cmd == "task"
     assert args == ["Ship", "report"]
 
-    cmd2, args2 = parse_command_args("/help@TheCharBot")
+    cmd2, args2 = parse_command_args("/help@YourBot")
     assert cmd2 == "help"
     assert args2 == []
 

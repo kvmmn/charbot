@@ -18,7 +18,7 @@ import charbot.bot as bot
 from charbot.config import Settings
 from charbot.store import TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 TODAY = date(2026, 9, 3)
 
 
@@ -34,7 +34,7 @@ def _no_send_delay(monkeypatch):
 
 
 class FakeUser:
-    def __init__(self, id=1, username="kvmmn", full_name="Kaveh", first_name="Kaveh"):
+    def __init__(self, id=1, username="kawe_tg", full_name="Kaveh", first_name="Kaveh"):
         self.id = id
         self.username = username
         self.full_name = full_name
@@ -46,7 +46,7 @@ class FakeChat:
     def __init__(self, chat_id=GROUP, chat_type=ChatType.SUPERGROUP):
         self.id = chat_id
         self.type = chat_type
-        self.title = "X-Chaharsotoon"
+        self.title = "Example Board"
         self.full_name = None
 
 
@@ -121,7 +121,7 @@ def _settings(**overrides) -> Settings:
 def _store(tmp_path: Path) -> TaskStore:
     store = TaskStore(tmp_path / "presentation.db")
     store.upsert_user_mapping(
-        telegram_user_id=1, member_key="kawe", username="kvmmn", display_name="Kaveh"
+        telegram_user_id=1, member_key="kawe", username="kawe_tg", display_name="Kaveh"
     )
     return store
 

@@ -78,7 +78,7 @@ def test_migrate_kv_roles_into_person_facts(tmp_path: Path) -> None:
     store = TaskStore(db)
     assert store.get_person_role("saman") == "طراح محصول از kv"
     assert store.get_person_role("kawe")  # seeded known fact
-    assert store.get_person_role("hamed") == "مدیرعامل، سرپرست طراحی، طراح"
+    assert store.get_person_role("hamed") == "Lead; design"
     assert "hamed" not in store.list_people_missing_role()
     assert store.get_kv("telegram_group_id") == "-100"
 
@@ -88,7 +88,7 @@ def test_upsert_mapping_syncs_people(tmp_path: Path) -> None:
     store.upsert_user_mapping(
         telegram_user_id=99,
         member_key="kawe",
-        username="kvmmn",
+        username="kawe_tg",
         display_name="Kawe",
     )
     with store._conn() as conn:
@@ -101,7 +101,7 @@ def test_upsert_mapping_syncs_people(tmp_path: Path) -> None:
             """
         ).fetchone()
     assert int(row["telegram_user_id"]) == 99
-    assert row["username"] == "kvmmn"
+    assert row["username"] == "kawe_tg"
 
 
 def test_person_events_and_lessons(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_person_events_and_lessons(tmp_path: Path) -> None:
 
 def test_hamed_role_never_missing(tmp_path: Path) -> None:
     store = TaskStore(tmp_path / "hamed.db")
-    assert store.get_person_role("hamed") == "مدیرعامل، سرپرست طراحی، طراح"
+    assert store.get_person_role("hamed") == "Lead; design"
     missing = store.list_people_missing_role()
     assert "hamed" not in missing
     assert missing == ["mohammadreza", "saman"]

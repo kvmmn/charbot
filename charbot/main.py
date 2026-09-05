@@ -132,7 +132,7 @@ def run_webhook(settings: Settings) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="charbot — Chaharsotoon coordinator")
+    parser = argparse.ArgumentParser(description="charbot — Telegram coordinator")
     parser.add_argument(
         "--mode",
         choices=["polling", "webhook"],

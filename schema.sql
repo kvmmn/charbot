@@ -1,4 +1,4 @@
--- Chaharsotoon canonical Postgres schema.
+-- charbot canonical Postgres schema (Example Org defaults in app code).
 -- Source of truth for identity / work / comms / ops.
 -- No secrets. Apply tables first; compatibility views after dropping legacy public tables.
 

@@ -250,7 +250,7 @@ def _work_note_for(store: TaskStore, key: str) -> str | None:
 
 def format_board_overview(store: TaskStore) -> str:
     """Persian snapshot of the four board members: mention, role titles, work notes."""
-    lines = ["نقش و کار چهار نفر در چهارستون:"]
+    lines = ["نقش و کار چهار نفر در سازمان:"]
     for key in BOARD_OVERVIEW_KEYS:
         mention = _mention_for(store, key)
         name = member_display_fa(key)
@@ -268,7 +268,7 @@ def format_board_overview(store: TaskStore) -> str:
 
 def _bot_addressed(message, text: str) -> bool:
     low = text.lower()
-    if "thecharbot" in low or "چاربات" in text or "charbot" in low:
+    if "yourbot" in low or "چاربات" in text or "charbot" in low:
         return True
     return False
 
@@ -788,7 +788,7 @@ async def _ask_missing_roles(bot, store: TaskStore, chat_id: int) -> None:
         return
     parts = []
     for key in missing:
-        parts.append(f"{_mention_for(store, key)} نقش تو در چهارستون چیست؟ یک جمله.")
+        parts.append(f"{_mention_for(store, key)} نقش تو در سازمان چیست؟ یک جمله.")
     await bot.send_message(chat_id=chat_id, text="\n".join(parts) + "\nمنتظر یکی نمی‌مانم.")
 
 
@@ -895,7 +895,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _reject_if_not_allowed(update, settings):
         return
     await update.effective_message.reply_text(
-        "سلام، من چاربات هستم. هماهنگ‌کننده چهارستون.\n"
+        "سلام، من چاربات هستم. هماهنگ‌کننده گروه.\n"
         "/help را بزن یا همین‌جا حرف بزن، صدا یا عکس بفرست.",
     )
 
@@ -989,7 +989,7 @@ async def cmd_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     group_id = _require_group(update)
     if group_id is None:
-        await update.effective_message.reply_text("Use /task inside the X-Chaharsotoon group.")
+        await update.effective_message.reply_text("Use /task inside the configured Telegram group.")
         return
 
     store: TaskStore = context.bot_data["store"]

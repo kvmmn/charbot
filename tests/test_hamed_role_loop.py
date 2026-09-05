@@ -8,7 +8,7 @@ from charbot.bot import _looks_like_work, _missing_roles, _role_saved
 from charbot.store import TaskStore
 
 HAMED_ROLE = "مدیرعامل\nسرپرست طراحی\nطراح"
-HAMED_FOLLOWUP = "الان نقشم و گفتم فهمیدی @TheCharBot"
+HAMED_FOLLOWUP = "الان نقشم و گفتم فهمیدی @YourBot"
 HAMED_JOKE = "فک میکردم  عاقلی"
 
 
@@ -17,8 +17,8 @@ def _store_with_hamed(tmp_path: Path) -> TaskStore:
     store.upsert_user_mapping(
         telegram_user_id=84184761,
         member_key="hamed",
-        username="Musketeer1985",
-        display_name="Hamed Akhoundi",
+        username="alice_tg",
+        display_name="Hamed",
     )
     store.set_person_role("hamed", "مدیرعامل، سرپرست طراحی، طراح", source="hamed")
     store.set_kv("dialog", "work")

@@ -21,7 +21,7 @@ from charbot.voice import (
     voice_is_pending,
 )
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 TRANSCRIPT = (
     "ببین من یه کار دیگه هم انجام میدم و اون براورد مالی پروژه هست "
     "که در ابتدای پروژه باید انجام بشه"
@@ -34,13 +34,13 @@ def _store(tmp_path: Path) -> TaskStore:
     store.upsert_user_mapping(
         telegram_user_id=111,
         member_key="saman",
-        username="samanf202",
+        username="bob_tg",
         display_name="Saman",
     )
     store.upsert_user_mapping(
         telegram_user_id=84184761,
         member_key="hamed",
-        username="Musketeer1985",
+        username="alice_tg",
         display_name="Hamed",
     )
     return store
@@ -51,9 +51,9 @@ def _log_voice(store: TaskStore, message_id: int = 1944) -> None:
         telegram_update_id=9000 + message_id,
         chat_id=GROUP,
         chat_type="supergroup",
-        chat_title="X-Chaharsotoon",
+        chat_title="Example Board",
         user_id=111,
-        username="samanf202",
+        username="bob_tg",
         display_name="Saman",
         message_id=message_id,
         kind="voice",
@@ -82,10 +82,10 @@ def _labels(rows: list[list[tuple[str, str]]]) -> list[str]:
 def test_confirm_prompt_uses_full_transcript_not_summary() -> None:
     assert len(LONG) > 280
     assert summarize_fa(LONG) != LONG
-    prompt = confirmation_prompt("saman", LONG)
+    prompt = confirmation_prompt("saman", LONG, username="bob_tg")
     assert f"<blockquote>{escape(LONG)}</blockquote>" in prompt
     assert LONG in prompt
-    assert "@samanf202" in prompt
+    assert "@bob_tg" in prompt
     assert CONFIRM_ASK_FA in prompt
     assert "گفت:" not in prompt
     assert "گرفتم ثبت شد" not in prompt

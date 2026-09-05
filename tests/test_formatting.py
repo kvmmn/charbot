@@ -359,7 +359,7 @@ def test_task_question_flags_unassigned():
 
 
 def test_resolved_edit_shows_who_and_choice_no_keyboard_hint():
-    when = datetime(2026, 9, 3, 17, 20)
+    when = datetime.now().replace(hour=17, minute=20, second=0, microsecond=0)
     text = format_resolved("غزل", "تا فردا می‌فرستم", when=when)
     assert text.startswith("<b>ثبت شد</b>")
     assert "غزل: تا فردا می‌فرستم" in text

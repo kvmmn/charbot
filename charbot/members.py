@@ -14,12 +14,12 @@ class BoardMember:
 
 BOARD_MEMBERS: tuple[BoardMember, ...] = (
     BoardMember("kawe", "Kawe", ("kawe", "kaveh", "kave", "کاوه", "کاو")),
-    BoardMember("hamed", "Hamed", ("hamed", "حمید", "حامد", "آخوندی", "اخوندی")),
+    BoardMember("hamed", "Hamed", ("hamed", "حمید", "حامد")),
     BoardMember("saman", "Saman", ("saman", "سامان")),
     BoardMember(
         "mohammadreza",
         "Mohammadreza",
-        ("mohammadreza", "mohammad", "mreza", "محمدرضا", "محمد", "حیدری"),
+        ("mohammadreza", "mohammad", "mreza", "محمدرضا", "محمد"),
     ),
     BoardMember("ghazal", "Ghazal", ("ghazal", "غزل")),
 )
@@ -78,8 +78,8 @@ def member_display_fa(key: str | None) -> str:
     return FA_DISPLAY.get(key, member_display(key))
 
 
-# People who are not in X-Chaharsotoon: tasks keep their assignee, but
-# follow-up questions and @mentions go through another member.
+# People who are not in the primary Telegram group: tasks keep their assignee,
+# but follow-up questions and @mentions go through another member.
 FOLLOWUP_VIA: dict[str, str] = {
     "ghazal": "hamed",
 }

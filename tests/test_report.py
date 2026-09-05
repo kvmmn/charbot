@@ -15,7 +15,7 @@ from charbot.report import (
 )
 from charbot.store import TaskStatus, TaskStore
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 BERLIN = ZoneInfo("Europe/Berlin")
 TODAY = date(2026, 8, 31)  # Monday
 

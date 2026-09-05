@@ -12,7 +12,7 @@ from charbot.voice import (
     summarize_fa,
 )
 
-GROUP = -1002781646107
+GROUP = -1001111111111
 TRANSCRIPT = (
     "ببین من یه کار دیگه هم انجام میدم و اون براورد مالی پروژه هست "
     "که در ابتدای پروژه باید انجام بشه"
@@ -36,9 +36,9 @@ def test_persist_and_recall_voice(tmp_path: Path) -> None:
         telegram_update_id=9001,
         chat_id=GROUP,
         chat_type="supergroup",
-        chat_title="X-Chaharsotoon",
+        chat_title="Example Board",
         user_id=None,
-        username="samanf202",
+        username="bob_tg",
         display_name="Saman",
         message_id=1944,
         kind="voice",
@@ -49,7 +49,7 @@ def test_persist_and_recall_voice(tmp_path: Path) -> None:
     store.upsert_user_mapping(
         telegram_user_id=111,
         member_key="saman",
-        username="samanf202",
+        username="bob_tg",
         display_name="Saman",
     )
     with store._conn() as conn:

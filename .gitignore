@@ -16,3 +16,7 @@ data/
 htmlcov/
 _run_polling.py
 save-token.sh
+preview_ui.txt
+ui_preview*.png
+postgresql:/
+fly.toml.local

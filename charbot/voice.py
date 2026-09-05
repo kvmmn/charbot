@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from charbot.buttons import question_buttons
+from charbot.config import telegram_username
 from charbot.glossary import is_learn_utterance
 from charbot.members import member_display_fa
 from charbot.store import TaskStore
@@ -32,7 +33,7 @@ OPENROUTER_ASR_BASE = "https://openrouter.ai/api/v1"
 OPENROUTER_ASR_MODEL = "deepgram/nova-3"
 OPENROUTER_ASR_FALLBACK_MODEL = "openai/whisper-large-v3"
 ASR_GLOSSARY_PROMPT = (
-    "Persian speech. Proper names: چهارستون، شی SHEY، مشهد، فرجی، فرهمند، "
+    "Persian speech. Proper names: Example Org، Demo Project، مشهد، فرجی، فرهمند، "
     "JTI جی‌تی‌آی، امام خمینی، مهرآباد، غزل، حامد، سامان، محمدرضا، کاوه."
 )
 CONFIRM_ASK_FA = "این را از صدایت نوشتم. همین بود؟"
@@ -49,13 +50,6 @@ FACT_LATEST_SUMMARY = "latest_voice_summary"
 EDIT_WAIT_FA = "بگو درستش چی بود، همان را می‌نویسم."
 CONFIRMED_MARK_FA = "باشه، نوشتم."
 WRONG_SPEAKER_FA = "این تأیید مال گوینده است"
-
-KNOWN_USERNAMES = {
-    "saman": "samanf202",
-    "kawe": "kvmmn",
-    "hamed": "Musketeer1985",
-    "mohammadreza": "MREZA_HEIDARI08",
-}
 
 # Meaning + obvious yes-words. Matching strips filler; leftover must be tiny.
 _YES_TOKENS = (
@@ -98,7 +92,7 @@ _INLINE_LOCK_RE = re.compile(
     r"(این درسته|این درست است|این همان است|همین درسته|این همینه)",
 )
 _CONFIRM_STRIP_RE = re.compile(
-    r"@\S+|چاربات|thecharbot|[؟!?.!,،؛:…«»()\[\]]+",
+    r"@\S+|چاربات|yourbot|charbot|[؟!?.!,،؛:…«»()\[\]]+",
     re.IGNORECASE,
 )
 
@@ -317,7 +311,7 @@ def _transcribe_http_once(audio: Path, language: str, backend: AsrBackend) -> st
         "Content-Type": f"multipart/form-data; boundary={boundary}",
     }
     if backend.name == "openrouter":
-        headers["HTTP-Referer"] = "https://charbot.chaharsotoon"
+        headers["HTTP-Referer"] = "https://github.com/kvmmn/charbot"
         headers["X-Title"] = "charbot"
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
@@ -452,7 +446,7 @@ def username_for_member(store: TaskStore | None, member_key: str | None) -> str 
         for mapping in store.list_user_mappings():
             if mapping.member_key == member_key and mapping.username:
                 return mapping.username
-    return KNOWN_USERNAMES.get(member_key)
+    return telegram_username(member_key)
 
 
 def mention_for_member(store: TaskStore | None, member_key: str | None) -> str:
